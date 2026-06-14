@@ -1,0 +1,12 @@
+{
+  "name": "tempo-inmet",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "dev": "netlify dev",
+    "build": "echo \"Static site: no build step\""
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}
