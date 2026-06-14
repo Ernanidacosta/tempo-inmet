@@ -251,8 +251,15 @@
     .dd-cell-val { font-size: .82rem; font-weight: 500; font-variant-numeric: tabular-nums; }
 
     /* footer */
-    .footer { margin-top: auto; padding-top: 1rem; display: flex; justify-content: flex-end; }
+    .footer { margin-top: auto; padding-top: 1rem; display: flex; align-items: center; justify-content: space-between; }
     .source { font-size: .56rem; opacity: .3; text-transform: uppercase; letter-spacing: .1em; }
+    .rel-pill {
+      font-size: .58rem; font-weight: 600; letter-spacing: .08em; text-transform: uppercase;
+      padding: .2rem .6rem; border-radius: 999px; border: 1px solid transparent;
+    }
+    .rel-alta  { background: rgba(34,197,94,.18);  border-color: rgba(34,197,94,.4);  color: #86efac; }
+    .rel-boa   { background: rgba(56,189,248,.15); border-color: rgba(56,189,248,.4); color: #7dd3fc; }
+    .rel-padrao{ background: rgba(148,163,184,.12);border-color: rgba(148,163,184,.3);color: #94a3b8; }
 
     /* ── search overlay (mobile: fullscreen) ─── */
     #search {
@@ -483,6 +490,7 @@
     <div id="day-detail" hidden></div>
 
     <div class="footer">
+      <span id="rel-pill" class="rel-pill" hidden></span>
       <span class="source" id="src"></span>
     </div>
 
@@ -705,6 +713,14 @@
       fcEl.appendChild(el);
     });
 
+    // reliability badge
+    const relEl = $id('rel-pill');
+    const relMap = { alta: ['rel-alta', 'Alta confiabilidade'], boa: ['rel-boa', 'Boa confiabilidade'], 'padrão': ['rel-padrao', 'Confiabilidade padrão'] };
+    const relInfo = relMap[data.reliability] || relMap['padrão'];
+    relEl.className = `rel-pill ${relInfo[0]}`;
+    relEl.textContent = relInfo[1];
+    relEl.hidden = false;
+
     // source
     const srcMap = {
       'inmet': '· INMET',
@@ -819,6 +835,7 @@
     return {
       city: cityName,
       source: 'open-meteo',
+      reliability: 'padrão',
       current: {
         temp:          cw.temperature != null ? Math.round(cw.temperature) : null,
         feels_like:    h('apparent_temperature') != null ? Math.round(h('apparent_temperature')) : null,
