@@ -443,6 +443,11 @@ def _merge(city_name, wx, aq, cptec_days, obs_current=None):
         'city':        city_name,
         'source':      source,
         'reliability': reliability,
+        'key_status':  {
+            'owm':        bool(os.environ.get('OWM_KEY')),
+            'tomorrowio': bool(os.environ.get('TOMORROWIO_KEY')),
+        },
+        'tile_key':    os.environ.get('OWM_KEY', ''),
         'current':     current,
         'today': {
             'sunrise':   sunrise,

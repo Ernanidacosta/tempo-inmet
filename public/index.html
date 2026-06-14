@@ -325,6 +325,24 @@
       font-size: .72rem; font-weight: 600; letter-spacing: .02em;
     }
 
+    /* ── radar map ─── */
+    .section-hd {
+      display: flex; align-items: center; justify-content: space-between;
+      font-size: .6rem; font-weight: 700; letter-spacing: .12em;
+      color: rgba(255,255,255,.4); text-transform: uppercase; margin: 1.4rem 0 .4rem;
+    }
+    .layer-btns { display: flex; gap: .3rem; }
+    .layer-btn {
+      font-size: .65rem; padding: .2rem .55rem; border-radius: 999px;
+      background: rgba(255,255,255,.08); border: 1px solid rgba(255,255,255,.15);
+      color: rgba(255,255,255,.5); cursor: pointer; transition: background .15s;
+    }
+    .layer-btn.active {
+      background: rgba(56,189,248,.25); border-color: rgba(56,189,248,.5); color: #7dd3fc;
+    }
+    #radar-map { height: 280px; border-radius: 12px; overflow: hidden; margin-top: .5rem; }
+    @media (max-width: 480px) { #radar-map { height: 200px; } }
+
     /* ── search overlay ─── */
     #search-backdrop {
       position: fixed; inset: 0; z-index: 99;
@@ -488,6 +506,7 @@
       .wx-icon { font-size: 6.5rem; }
     }
   </style>
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
 </head>
 <body class="sky-clear">
 <div id="app">
@@ -588,6 +607,18 @@
 
     <div id="day-detail" hidden aria-live="polite"></div>
 
+    <section id="radar-section" hidden>
+      <div class="section-hd">
+        RADAR
+        <div class="layer-btns" role="group" aria-label="Camada do mapa">
+          <button class="layer-btn active" data-layer="precipitation_new">Chuva</button>
+          <button class="layer-btn" data-layer="temp_new">Temperatura</button>
+          <button class="layer-btn" data-layer="wind_new">Vento</button>
+        </div>
+      </div>
+      <div id="radar-map"></div>
+    </section>
+
     <div class="footer">
       <span id="rel-pill" class="rel-pill" hidden></span>
       <span id="thunder-pill" class="thunder-pill" hidden aria-live="polite"></span>
@@ -612,6 +643,7 @@
 
 <script>
   const FALLBACK = { lat: -18.9186, lon: -48.2772 };
+  let _lastLat = FALLBACK.lat, _lastLon = FALLBACK.lon;
 
   const EMOJI = {
     0:'☀️',1:'🌤️',2:'⛅',3:'☁️',
@@ -1017,6 +1049,7 @@
 
   // ── load ────────────────────────────────────────
   async function load(lat, lon) {
+    _lastLat = lat; _lastLon = lon;
     show('loading'); hide('wx'); hide('err');
     let data = null;
 
@@ -1039,6 +1072,7 @@
       return;
     }
     render(data);
+    initRadarMap(_lastLat, _lastLon, data.tile_key || '');
   }
 
   function init() {
@@ -1116,6 +1150,42 @@
   }
 
   init();
+</script>
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script>
+  let _map = null, _owmLayer = null, _marker = null, _activeMapLayer = 'precipitation_new';
+
+  function initRadarMap(lat, lon, tileKey) {
+    if (!tileKey) return;
+    show('radar-section');
+    if (_map) {
+      _map.setView([lat, lon], 9);
+      if (_marker) _marker.setLatLng([lat, lon]);
+    } else {
+      _map = L.map('radar-map', { zoomControl: true, attributionControl: false })
+               .setView([lat, lon], 9);
+      L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 18 })
+       .addTo(_map);
+      _marker = L.marker([lat, lon]).addTo(_map);
+    }
+    _setOwmLayer(_activeMapLayer, tileKey);
+    document.querySelectorAll('.layer-btn').forEach(btn => {
+      btn.onclick = () => {
+        document.querySelectorAll('.layer-btn').forEach(b => b.classList.remove('active'));
+        btn.classList.add('active');
+        _activeMapLayer = btn.dataset.layer;
+        _setOwmLayer(_activeMapLayer, tileKey);
+      };
+    });
+  }
+
+  function _setOwmLayer(layer, key) {
+    if (_owmLayer) _map.removeLayer(_owmLayer);
+    _owmLayer = L.tileLayer(
+      `https://tile.openweathermap.org/map/${layer}/{z}/{x}/{y}.png?appid=${key}`,
+      { opacity: 0.6, maxZoom: 18 }
+    ).addTo(_map);
+  }
 </script>
 </body>
 </html>

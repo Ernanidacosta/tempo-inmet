@@ -406,6 +406,15 @@ class TestReliability:
         r = _merge('X', _fake_wx(2), None, None, obs_current=obs)
         assert r['current']['thunder_prob'] == 45
 
+    def test_key_status_in_response(self):
+        r = _merge('X', _fake_wx(2), None, None)
+        assert 'key_status' in r
+        assert 'owm' in r['key_status']
+        assert 'tomorrowio' in r['key_status']
+        assert isinstance(r['key_status']['owm'], bool)
+        assert isinstance(r['key_status']['tomorrowio'], bool)
+        assert 'tile_key' in r
+
 
 class TestHandlerValidation:
     def test_missing_params(self):
