@@ -200,14 +200,55 @@
       border: 1px solid rgba(255,255,255,.11);
       border-radius: .7rem; padding: .5rem .1rem;
       text-align: center; min-width: 48px;
+      cursor: pointer; transition: background .15s, border-color .15s;
     }
-    .day.today { background: rgba(255,255,255,.17); border-color: rgba(255,255,255,.28); }
+    .day:hover    { background: rgba(255,255,255,.14); }
+    .day.today    { background: rgba(255,255,255,.17); border-color: rgba(255,255,255,.28); }
+    .day.selected { background: rgba(255,255,255,.22); border-color: rgba(255,255,255,.45); }
     .day-name  { font-size: .56rem; text-transform: uppercase; letter-spacing: .06em; opacity: .6; margin-bottom: .25rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
     .day-icon  { font-size: 1.25rem; line-height: 1; margin-bottom: .22rem; }
     .day-temps { font-size: .68rem; font-variant-numeric: tabular-nums; }
     .day-max   { font-weight: 600; }
     .day-min   { opacity: .5; }
     .day-pop   { font-size: .6rem; color: #93c5fd; margin-top: .12rem; min-height: .75rem; }
+
+    /* ── day detail panel ─── */
+    #day-detail {
+      background: rgba(255,255,255,.11);
+      border: 1px solid rgba(255,255,255,.18);
+      border-radius: 1rem;
+      backdrop-filter: blur(8px); -webkit-backdrop-filter: blur(8px);
+      padding: 1rem;
+      margin-bottom: 1rem;
+      animation: fadeSlide .18s ease;
+    }
+    @keyframes fadeSlide {
+      from { opacity: 0; transform: translateY(-5px); }
+      to   { opacity: 1; transform: translateY(0); }
+    }
+    .dd-hdr {
+      display: flex; align-items: center; gap: .65rem;
+      margin-bottom: .85rem;
+    }
+    .dd-icon  { font-size: 2.2rem; line-height: 1; flex-shrink: 0; }
+    .dd-meta  { flex: 1; min-width: 0; }
+    .dd-title { font-size: 1rem; font-weight: 500; }
+    .dd-cond  { font-size: .76rem; opacity: .6; margin-top: .05rem; }
+    .dd-temp  {
+      font-size: 1.5rem; font-weight: 200;
+      font-variant-numeric: tabular-nums; white-space: nowrap;
+    }
+    .dd-temp-min { opacity: .45; }
+    .dd-grid {
+      display: grid; grid-template-columns: repeat(3, 1fr);
+      gap: .4rem .2rem;
+    }
+    .dd-cell { text-align: center; padding: .3rem .1rem; }
+    .dd-cell-lbl {
+      font-size: .54rem; text-transform: uppercase;
+      letter-spacing: .1em; opacity: .48; margin-bottom: .12rem;
+    }
+    .dd-cell-val { font-size: .82rem; font-weight: 500; font-variant-numeric: tabular-nums; }
 
     /* footer */
     .footer { margin-top: auto; padding-top: 1rem; display: flex; justify-content: flex-end; }
@@ -342,6 +383,15 @@
       /* section labels */
       .sec-label { font-size: .62rem; margin-bottom: .55rem; }
 
+      /* day detail panel */
+      #day-detail { padding: 1.25rem 1.25rem 1rem; }
+      .dd-grid { grid-template-columns: repeat(6, 1fr); gap: .5rem .3rem; }
+      .dd-icon  { font-size: 2.75rem; }
+      .dd-title { font-size: 1.1rem; }
+      .dd-temp  { font-size: 1.8rem; }
+      .dd-cell-lbl { font-size: .58rem; }
+      .dd-cell-val { font-size: .9rem; }
+
       /* search: centered modal, not fullscreen */
       #search {
         inset: auto;
@@ -429,6 +479,8 @@
 
     <div class="sec-label">Próximos 7 dias</div>
     <div class="fc" id="fc"></div>
+
+    <div id="day-detail" hidden></div>
 
     <div class="footer">
       <span class="source" id="src"></span>
@@ -528,8 +580,62 @@
   function show(id) { $id(id).hidden = false; }
   function hide(id) { $id(id).hidden = true; }
 
+  let allData = null;
+  let selectedDayIdx = -1;
+
+  function renderDayDetail(idx) {
+    const days = (allData || {}).daily || [];
+    if (idx === selectedDayIdx || !days[idx]) {
+      selectedDayIdx = -1;
+      hide('day-detail');
+      document.querySelectorAll('.day').forEach(el => el.classList.remove('selected'));
+      return;
+    }
+    selectedDayIdx = idx;
+    document.querySelectorAll('.day').forEach((el, i) => el.classList.toggle('selected', i === idx));
+
+    const d = days[idx];
+    const uv = d.uv_max != null ? `${d.uv_max} · ${uvLabel(d.uv_max)}` : '–';
+    const cells = [
+      ['Chance chuva', d.precip_prob != null ? `${d.precip_prob}%` : '–'],
+      ['Precipitação', d.precip_mm != null ? `${d.precip_mm} mm` : '–'],
+      ['Índice UV',    uv],
+      ['Vento máx.',  d.wind_max_kph != null ? `${d.wind_max_kph} km/h` : '–'],
+      ['Nascer sol',  d.sunrise || '–'],
+      ['Pôr do sol',  d.sunset  || '–'],
+    ];
+
+    $id('day-detail').innerHTML = `
+      <div class="dd-hdr">
+        <div class="dd-icon">${wxEmoji(d.code || 0)}</div>
+        <div class="dd-meta">
+          <div class="dd-title">${d.day}</div>
+          <div class="dd-cond">${d.condition}</div>
+        </div>
+        <div class="dd-temp">
+          ${d.max != null ? d.max : '–'}°
+          <span class="dd-temp-min"> / ${d.min != null ? d.min : '–'}°</span>
+        </div>
+      </div>
+      <div class="dd-grid">
+        ${cells.map(([lbl, val]) => `
+          <div class="dd-cell">
+            <div class="dd-cell-lbl">${lbl}</div>
+            <div class="dd-cell-val">${val}</div>
+          </div>`).join('')}
+      </div>`;
+
+    show('day-detail');
+    if (window.innerWidth < 720) {
+      $id('day-detail').scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+    }
+  }
+
   // ── render ──────────────────────────────────────
   function render(data) {
+    allData = data;
+    selectedDayIdx = -1;
+    hide('day-detail');
     const c = data.current || {};
     const t = data.today || {};
     const daily  = data.daily  || [];
@@ -595,6 +701,7 @@
           <span class="day-min">/${d.min != null ? d.min : '–'}°</span>
         </div>
         <div class="day-pop">${d.precip_prob > 0 ? d.precip_prob + '%' : ''}</div>`;
+      el.onclick = () => renderDayDetail(i);
       fcEl.appendChild(el);
     });
 
@@ -690,6 +797,10 @@
     const dPop    = daily.precipitation_probability_max || [];
     const dUv     = daily.uv_index_max || [];
 
+    const dWind   = daily.windspeed_10m_max || [];
+    const dSunrise = daily.sunrise || [];
+    const dSunset  = daily.sunset  || [];
+
     const dailyOut = dTimes.slice(0, 7).map((dt, i) => ({
       day: dayLabel(dt, i),
       code: dCode[i] ?? 0,
@@ -699,6 +810,9 @@
       precip_mm: dPrecip[i] ?? 0,
       precip_prob: dPop[i] ?? 0,
       uv_max: dUv[i] != null ? Math.round(dUv[i] * 10) / 10 : null,
+      wind_max_kph: dWind[i] != null ? Math.round(dWind[i]) : null,
+      sunrise: dSunrise[i] ? dSunrise[i].slice(11, 16) : null,
+      sunset:  dSunset[i]  ? dSunset[i].slice(11, 16)  : null,
     }));
 
     const visM = h('visibility');

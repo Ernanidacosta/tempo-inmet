@@ -1,10 +1,48 @@
 import json
 from weather import (
     _rnd, _flt, _int, _parse_day, _bearing, _err, _round1,
-    _text, _find_hour_idx,
+    _text, _find_hour_idx, _merge,
     COND_MAP, WMO_CONDITIONS, DAYS_PT, BR_STATES,
 )
 import xml.etree.ElementTree as ET
+
+
+def _fake_wx(n=2):
+    """Minimal Open-Meteo response with n daily entries."""
+    return {
+        'current_weather': {
+            'time': '2024-01-15T12:00', 'temperature': 28.0,
+            'windspeed': 12.0, 'winddirection': 90, 'weathercode': 2, 'is_day': 1,
+        },
+        'hourly': {
+            'time': ['2024-01-15T12:00', '2024-01-15T13:00'],
+            'temperature_2m': [28.0, 29.0],
+            'relativehumidity_2m': [65, 63],
+            'apparent_temperature': [30.0, 31.0],
+            'precipitation_probability': [10, 15],
+            'precipitation': [0.0, 0.0],
+            'weathercode': [2, 2],
+            'surface_pressure': [1013.0, 1013.0],
+            'visibility': [10000.0, 10000.0],
+            'uv_index': [5.0, 4.5],
+            'dewpoint_2m': [18.0, 18.5],
+            'windspeed_10m': [12.0, 11.0],
+            'winddirection_10m': [90, 95],
+            'windgusts_10m': [18.0, 17.0],
+        },
+        'daily': {
+            'time': [f'2024-01-{15+i:02d}' for i in range(n)],
+            'weathercode': [2] * n,
+            'temperature_2m_max': [33.0] * n,
+            'temperature_2m_min': [19.0] * n,
+            'precipitation_sum': [0.0] * n,
+            'precipitation_probability_max': [20] * n,
+            'uv_index_max': [8.5] * n,
+            'windspeed_10m_max': [25.0] * n,
+            'sunrise': [f'2024-01-{15+i:02d}T06:15' for i in range(n)],
+            'sunset':  [f'2024-01-{15+i:02d}T18:30' for i in range(n)],
+        },
+    }
 
 
 class TestHelpers:
@@ -174,6 +212,46 @@ class TestErrHelper:
 
     def test_content_type(self):
         assert _err(404, "x")["headers"]["Content-Type"] == "application/json"
+
+
+class TestDailyFields:
+    """Verify _merge adds wind_max_kph, sunrise, sunset to every daily entry."""
+
+    def test_wind_max_present(self):
+        result = _merge('Uberlândia, MG', _fake_wx(2), None, None)
+        for day in result['daily']:
+            assert 'wind_max_kph' in day
+
+    def test_wind_max_value(self):
+        result = _merge('Uberlândia, MG', _fake_wx(2), None, None)
+        assert result['daily'][0]['wind_max_kph'] == 25
+
+    def test_sunrise_present(self):
+        result = _merge('Uberlândia, MG', _fake_wx(2), None, None)
+        for day in result['daily']:
+            assert 'sunrise' in day
+
+    def test_sunrise_format(self):
+        result = _merge('Uberlândia, MG', _fake_wx(2), None, None)
+        assert result['daily'][0]['sunrise'] == '06:15'
+
+    def test_sunset_format(self):
+        result = _merge('Uberlândia, MG', _fake_wx(2), None, None)
+        assert result['daily'][0]['sunset'] == '18:30'
+
+    def test_per_day_sunrise_differs(self):
+        result = _merge('Uberlândia, MG', _fake_wx(2), None, None)
+        assert result['daily'][0]['sunrise'] == result['daily'][1]['sunrise']
+
+    def test_cptec_path_has_fields(self):
+        cptec = [
+            {'day': 'Hoje', 'code': 0, 'condition': 'Ensolarado', 'max': 33, 'min': 19, 'uv_cptec': 8.5},
+            {'day': 'Amanhã', 'code': 2, 'condition': 'Parcialmente nublado', 'max': 30, 'min': 18, 'uv_cptec': 7.0},
+        ]
+        result = _merge('Uberlândia, MG', _fake_wx(2), None, cptec)
+        assert result['daily'][0]['wind_max_kph'] == 25
+        assert result['daily'][0]['sunrise'] == '06:15'
+        assert result['daily'][1]['sunset'] == '18:30'
 
 
 class TestHandlerValidation:

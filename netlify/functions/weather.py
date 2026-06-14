@@ -211,6 +211,13 @@ def _merge(city_name, wx, aq, cptec_days):
     d_precip = daily.get('precipitation_sum', [])
     d_pop = daily.get('precipitation_probability_max', [])
     d_uv = daily.get('uv_index_max', [])
+    d_wind_max = daily.get('windspeed_10m_max', [])
+
+    def _day_sunrise(i):
+        return sunrises[i][11:16] if i < len(sunrises) and sunrises[i] and len(sunrises[i]) >= 16 else None
+
+    def _day_sunset(i):
+        return sunsets[i][11:16] if i < len(sunsets) and sunsets[i] and len(sunsets[i]) >= 16 else None
 
     if cptec_days:
         daily_out = []
@@ -224,6 +231,9 @@ def _merge(city_name, wx, aq, cptec_days):
                 'precip_mm': round(float(d_precip[i]), 1) if i < len(d_precip) and d_precip[i] is not None else 0.0,
                 'precip_prob': _int(d_pop[i]) if i < len(d_pop) else 0,
                 'uv_max': d.get('uv_cptec') or (_round1(d_uv[i]) if i < len(d_uv) and d_uv[i] is not None else None),
+                'wind_max_kph': _rnd(d_wind_max[i]) if i < len(d_wind_max) and d_wind_max[i] is not None else None,
+                'sunrise': _day_sunrise(i),
+                'sunset': _day_sunset(i),
             })
         source = 'cptec+open-meteo'
     else:
@@ -239,6 +249,9 @@ def _merge(city_name, wx, aq, cptec_days):
                 'precip_mm': round(float(d_precip[i]), 1) if i < len(d_precip) and d_precip[i] is not None else 0.0,
                 'precip_prob': _int(d_pop[i]) if i < len(d_pop) else 0,
                 'uv_max': _round1(d_uv[i]) if i < len(d_uv) and d_uv[i] is not None else None,
+                'wind_max_kph': _rnd(d_wind_max[i]) if i < len(d_wind_max) and d_wind_max[i] is not None else None,
+                'sunrise': _day_sunrise(i),
+                'sunset': _day_sunset(i),
             })
         source = 'open-meteo'
 
