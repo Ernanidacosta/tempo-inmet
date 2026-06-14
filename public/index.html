@@ -318,6 +318,12 @@
     .rel-alta   { background: rgba(34,197,94,.18);  border-color: rgba(34,197,94,.4);  color: #86efac; }
     .rel-boa    { background: rgba(56,189,248,.15); border-color: rgba(56,189,248,.4); color: #7dd3fc; }
     .rel-padrao { background: rgba(148,163,184,.12);border-color: rgba(148,163,184,.3);color: #94a3b8; }
+    .thunder-pill {
+      display: inline-flex; align-items: center; gap: .3rem;
+      background: #3d2c00; color: #ffb300;
+      padding: .2rem .6rem; border-radius: 999px;
+      font-size: .72rem; font-weight: 600; letter-spacing: .02em;
+    }
 
     /* ── search overlay ─── */
     #search-backdrop {
@@ -555,7 +561,7 @@
           <div class="dl"><div class="dl-label">Sensação</div><div class="dl-val" id="d-feels">–</div></div>
           <div class="dl"><div class="dl-label">Umidade</div><div class="dl-val" id="d-hum">–</div></div>
           <div class="dl"><div class="dl-label">Vento</div><div class="dl-val" id="d-wind">–</div></div>
-          <div class="dl"><div class="dl-label">Chuva hoje</div><div class="dl-val" id="d-rain">–</div></div>
+          <div class="dl"><div class="dl-label">Chuva</div><div class="dl-val" id="d-rain">–</div></div>
         </div>
         <div class="details-secondary card" role="group" aria-label="Detalhes atmosféricos">
           <div class="dl"><div class="dl-label">Índice UV</div><div class="dl-val" id="d-uv">–</div></div>
@@ -584,6 +590,7 @@
 
     <div class="footer">
       <span id="rel-pill" class="rel-pill" hidden></span>
+      <span id="thunder-pill" class="thunder-pill" hidden aria-live="polite"></span>
       <span class="source" id="src" aria-label="Fonte dos dados"></span>
     </div>
 
@@ -778,7 +785,9 @@
     $id('d-hum').textContent   = c.humidity   != null ? `${c.humidity}%`   : '–';
     $id('d-wind').textContent  = c.wind_kph   != null
       ? `${c.wind_kph}${c.wind_dir ? ' ' + c.wind_dir : ''} km/h` : '–';
-    $id('d-rain').textContent  = daily[0]?.precip_prob != null ? `${daily[0].precip_prob}%` : '–';
+    $id('d-rain').textContent  = c.precip_now_mm > 0
+      ? `${c.precip_now_mm} mm/h`
+      : daily[0]?.precip_prob != null ? `${daily[0].precip_prob}%` : '–';
 
     // secondary details
     $id('d-uv').textContent   = c.uv_index      != null ? `${c.uv_index} · ${uvLabel(c.uv_index)}` : '–';
@@ -851,11 +860,25 @@
 
     // source
     const srcMap = {
-      'inmet': '· INMET',
-      'cptec+open-meteo': '· CPTEC/INPE + Open-Meteo',
-      'open-meteo': '· Open-Meteo',
+      'owm+cptec+open-meteo':        '· OWM + CPTEC + Open-Meteo',
+      'owm+open-meteo':              '· OWM + Open-Meteo',
+      'tomorrowio+cptec+open-meteo': '· Tomorrow.io + CPTEC + Open-Meteo',
+      'tomorrowio+open-meteo':       '· Tomorrow.io + Open-Meteo',
+      'inmet':                       '· INMET',
+      'cptec+open-meteo':            '· CPTEC/INPE + Open-Meteo',
+      'open-meteo':                  '· Open-Meteo',
     };
     $id('src').textContent = srcMap[data.source] || `· ${data.source || ''}`;
+
+    // thunder probability pill (Tomorrow.io only)
+    const tEl = $id('thunder-pill');
+    const tp = data.current?.thunder_prob;
+    if (tp != null && tp >= 20) {
+      tEl.textContent = `Trovoada ${tp}%`;
+      tEl.hidden = false;
+    } else {
+      tEl.hidden = true;
+    }
 
     hide('loading'); hide('err'); show('wx');
   }

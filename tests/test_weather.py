@@ -394,6 +394,18 @@ class TestReliability:
         r = _merge('X', _fake_wx(2), None, None, obs_current=obs)
         assert r['current']['code'] == 63
 
+    def test_precip_now_propagated(self):
+        obs = {'source_type': 'owm', 'temp': 24, 'code': 61,
+               'condition': 'Chuva leve', 'precip_now_mm': 1.5}
+        r = _merge('X', _fake_wx(2), None, None, obs_current=obs)
+        assert r['current']['precip_now_mm'] == 1.5
+
+    def test_thunder_prob_propagated(self):
+        obs = {'source_type': 'tomorrowio', 'temp': 25, 'code': 95,
+               'condition': 'Trovoada', 'thunder_prob': 45}
+        r = _merge('X', _fake_wx(2), None, None, obs_current=obs)
+        assert r['current']['thunder_prob'] == 45
+
 
 class TestHandlerValidation:
     def test_missing_params(self):

@@ -174,6 +174,7 @@ def _fetch_owm(lat, lon):
         'wind_gust_kph': _rnd((w.get('gust') or 0) * 3.6),
         'pressure_mb':   _rnd(m.get('pressure')),
         'visibility_km': _round1((data.get('visibility') or 0) / 1000),
+        'precip_now_mm': round(rain_mm, 1) if rain_mm else None,
         'code':          wmo,
         'condition':     WMO_CONDITIONS.get(wmo, ''),
     }
@@ -189,7 +190,7 @@ def _fetch_tomorrowio(lat, lon):
     if not key:
         return None
     fields = ('precipitationIntensity,temperature,humidity,'
-              'windSpeed,windDirection,windGust,weatherCode')
+              'windSpeed,windDirection,windGust,weatherCode,thunderstormProbability')
     data = _get_json(
         f'https://api.tomorrow.io/v4/weather/realtime'
         f'?location={lat:.4f},{lon:.4f}&fields={fields}&units=metric&apikey={key}',
@@ -199,6 +200,7 @@ def _fetch_tomorrowio(lat, lon):
     precip = v.get('precipitationIntensity') or 0.0
     wmo    = _precip_mm_to_wmo(precip) or _TIO_TO_WMO.get(v.get('weatherCode', 1000), 3)
     wd     = v.get('windDirection')
+    tp     = v.get('thunderstormProbability')
     return {
         'source_type':   'tomorrowio',
         'temp':          _rnd(v.get('temperature')),
@@ -206,6 +208,8 @@ def _fetch_tomorrowio(lat, lon):
         'wind_kph':      _rnd((v.get('windSpeed') or 0) * 3.6),
         'wind_dir':      _bearing(wd) if wd is not None else None,
         'wind_gust_kph': _rnd((v.get('windGust') or 0) * 3.6),
+        'precip_now_mm': round(precip, 1) if precip else None,
+        'thunder_prob':  _int(tp) if tp is not None else None,
         'code':          wmo,
         'condition':     WMO_CONDITIONS.get(wmo, ''),
     }
@@ -415,12 +419,15 @@ def _merge(city_name, wx, aq, cptec_days, obs_current=None):
         'dew_point':     _rnd(h('dewpoint_2m')),
         'uv_index':      _round1(cw.get('uv_index')),
         'is_day':        bool(cw.get('is_day', 1)),
+        'precip_now_mm': None,
+        'thunder_prob':  None,
     }
 
     # Override with observation-based current (OWM primary, Tomorrow.io fallback)
     if obs_current:
         obs_keys = ('temp', 'feels_like', 'humidity', 'wind_kph', 'wind_dir',
-                    'wind_gust_kph', 'pressure_mb', 'visibility_km', 'code', 'condition')
+                    'wind_gust_kph', 'pressure_mb', 'visibility_km', 'code', 'condition',
+                    'precip_now_mm', 'thunder_prob')
         for key in obs_keys:
             if obs_current.get(key) is not None:
                 current[key] = obs_current[key]
