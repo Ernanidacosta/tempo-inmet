@@ -2,7 +2,6 @@ import json
 import urllib.request
 import urllib.parse
 from datetime import date, datetime
-from concurrent.futures import ThreadPoolExecutor
 
 DAYS_PT = ["Dom", "Seg", "Ter", "Qua", "Qui", "Sex", "Sáb"]
 
@@ -177,11 +176,8 @@ def _fetch_open_meteo(lat, lon):
     })
     url = f"https://api.open-meteo.com/v1/forecast?{qs}"
 
-    with ThreadPoolExecutor(max_workers=2) as pool:
-        f_wx = pool.submit(_get_json, url, 8)
-        f_city = pool.submit(_reverse_geocode, lat, lon)
-        raw = f_wx.result()
-        city_name = f_city.result()
+    raw = _get_json(url, timeout=10)
+    city_name = _reverse_geocode(lat, lon)
 
     cw = raw.get("current_weather", {})
     daily = raw.get("daily", {})

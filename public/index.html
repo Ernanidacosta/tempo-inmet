@@ -526,23 +526,126 @@
       show('wx');
     }
 
+    const WMO_PT = {
+      0:'Céu limpo', 1:'Predominantemente limpo', 2:'Parcialmente nublado', 3:'Nublado',
+      45:'Nevoeiro', 48:'Nevoeiro com geada',
+      51:'Garoa leve', 53:'Garoa', 55:'Garoa intensa',
+      61:'Chuva leve', 63:'Chuva moderada', 65:'Chuva forte',
+      71:'Neve leve', 73:'Neve', 75:'Neve forte', 77:'Granizo',
+      80:'Pancadas leves', 81:'Pancadas de chuva', 82:'Pancadas fortes',
+      85:'Pancadas de neve', 86:'Neve intensa',
+      95:'Trovoada', 96:'Trovoada com granizo', 99:'Trovoada severa',
+    };
+
+    const DAYS_PT = ['Dom','Seg','Ter','Qua','Qui','Sex','Sáb'];
+
+    function dayLabel(isoDate, idx) {
+      if (idx === 0) return 'Hoje';
+      if (idx === 1) return 'Amanhã';
+      try {
+        const d = new Date(isoDate + 'T12:00:00');
+        return DAYS_PT[d.getDay()];
+      } catch (_) { return DAYS_PT[idx % 7]; }
+    }
+
+    async function fetchOpenMeteo(lat, lon) {
+      const qs = new URLSearchParams({
+        latitude: lat.toFixed(4), longitude: lon.toFixed(4),
+        daily: 'weathercode,temperature_2m_max,temperature_2m_min,precipitation_sum,precipitation_probability_max',
+        current_weather: 'true',
+        hourly: 'relativehumidity_2m,apparent_temperature',
+        timezone: 'America/Sao_Paulo',
+        forecast_days: '7',
+      });
+      const [wxRes, cityRes] = await Promise.all([
+        fetch(`https://api.open-meteo.com/v1/forecast?${qs}`),
+        fetch(`https://api.bigdatacloud.net/data/reverse-geocode-client?latitude=${lat}&longitude=${lon}&localityLanguage=pt`),
+      ]);
+      const wx = await wxRes.json();
+      const cd = await cityRes.json();
+
+      const cityName = (() => {
+        const c = cd.city || cd.locality || '';
+        const s = (cd.principalSubdivisionCode || '').replace(/^BR-/, '');
+        return c && s ? `${c}, ${s}` : c || 'Uberlândia, MG';
+      })();
+
+      const cw = wx.current_weather || {};
+      const daily = wx.daily || {};
+      const hourly = wx.hourly || {};
+      const code = cw.weathercode ?? 0;
+
+      // Find hourly index closest to now
+      const nowMs = Date.now();
+      const hourTimes = hourly.time || [];
+      let hi = 0;
+      let minDiff = Infinity;
+      hourTimes.forEach((t, i) => {
+        const diff = Math.abs(new Date(t).getTime() - nowMs);
+        if (diff < minDiff) { minDiff = diff; hi = i; }
+      });
+
+      const days = (daily.time || []).map((dt, i) => ({
+        day: dayLabel(dt, i),
+        code: daily.weathercode?.[i] ?? 0,
+        condition: WMO_PT[daily.weathercode?.[i]] || '',
+        max: daily.temperature_2m_max?.[i] != null ? Math.round(daily.temperature_2m_max[i]) : null,
+        min: daily.temperature_2m_min?.[i] != null ? Math.round(daily.temperature_2m_min[i]) : null,
+        precip_mm: daily.precipitation_sum?.[i] ?? 0,
+        precip_prob: daily.precipitation_probability_max?.[i] ?? 0,
+      }));
+
+      return {
+        city: cityName,
+        source: 'open-meteo',
+        current: {
+          temp: cw.temperature != null ? Math.round(cw.temperature) : null,
+          feels_like: hourly.apparent_temperature?.[hi] != null ? Math.round(hourly.apparent_temperature[hi]) : null,
+          humidity: hourly.relativehumidity_2m?.[hi] ?? null,
+          wind_kph: cw.windspeed != null ? Math.round(cw.windspeed) : null,
+          condition: WMO_PT[code] || '',
+          code,
+        },
+        daily: days,
+      };
+    }
+
     async function load(lat, lon) {
       show('loading');
       hide('wx');
       hide('err');
 
+      let data = null;
+
+      // Try Netlify function (proxies INMET with Open-Meteo fallback)
       try {
-        const r = await fetch(`/api/weather?lat=${lat}&lon=${lon}`);
-        if (!r.ok) throw new Error(`HTTP ${r.status}`);
-        const data = await r.json();
-        if (data.error) throw new Error(data.error);
-        render(data);
-      } catch (e) {
-        console.error(e);
+        const ctrl = new AbortController();
+        const tid = setTimeout(() => ctrl.abort(), 9000);
+        const r = await fetch(`/api/weather?lat=${lat}&lon=${lon}`, { signal: ctrl.signal });
+        clearTimeout(tid);
+        if (r.ok) {
+          const j = await r.json();
+          if (!j.error) data = j;
+        }
+      } catch (_) {}
+
+      // Browser-side fallback: Open-Meteo + BigDataCloud (no backend needed)
+      if (!data) {
+        try {
+          data = await fetchOpenMeteo(lat, lon);
+        } catch (e) {
+          console.error('Open-Meteo fallback failed:', e);
+        }
+      }
+
+      if (!data) {
         $id('err-msg').textContent = 'Não foi possível obter o clima. Verifique sua conexão.';
         hide('loading');
         show('err');
+        return;
       }
+
+      render(data);
     }
 
     function init() {
