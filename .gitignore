@@ -1,0 +1,21 @@
+# added by agent-md installer
+.agent/
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+.ruff_cache/
+
+# Poetry / venv
+.venv/
+dist/
+*.egg-info/
+
+# Netlify
+.netlify/
+
+# OS
+.DS_Store
+Thumbs.db
