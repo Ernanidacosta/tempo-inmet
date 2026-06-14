@@ -5,6 +5,7 @@ from weather import (
     _rnd, _flt, _int, _parse_day, _bearing, _err, _round1,
     _text, _find_hour_idx, _merge,
     _parse_inv, _grib2_nearest, _cloud_to_wmo, _eta_run_dt,
+    _precip_mm_to_wmo,
     COND_MAP, WMO_CONDITIONS, DAYS_PT, BR_STATES,
 )
 import xml.etree.ElementTree as ET
@@ -77,9 +78,14 @@ def _make_grib2(ni, nj, lat1, lon1, lat2, lon2, values, n_bits=16, R=0.0, E=0, D
 def _fake_wx(n=2):
     """Minimal Open-Meteo response with n daily entries."""
     return {
-        'current_weather': {
-            'time': '2024-01-15T12:00', 'temperature': 28.0,
-            'windspeed': 12.0, 'winddirection': 90, 'weathercode': 2, 'is_day': 1,
+        'current': {
+            'time': '2024-01-15T12:00',
+            'weather_code': 2, 'precipitation': 0.0,
+            'temperature_2m': 28.0, 'relative_humidity_2m': 65,
+            'apparent_temperature': 30.0,
+            'wind_speed_10m': 12.0, 'wind_direction_10m': 90,
+            'wind_gusts_10m': 18.0, 'surface_pressure': 1013.0,
+            'visibility': 10000.0, 'uv_index': 5.0, 'is_day': 1,
         },
         'hourly': {
             'time': ['2024-01-15T12:00', '2024-01-15T13:00'],
@@ -482,3 +488,29 @@ class TestHandlerValidation:
     def test_none_params(self):
         from weather import handler
         assert handler({"queryStringParameters": None}, None)["statusCode"] == 400
+
+
+class TestPrecipMmToWmo:
+    def test_none_returns_none(self):
+        assert _precip_mm_to_wmo(None) is None
+
+    def test_below_threshold_returns_none(self):
+        assert _precip_mm_to_wmo(0.05) is None
+
+    def test_exactly_zero_returns_none(self):
+        assert _precip_mm_to_wmo(0.0) is None
+
+    def test_garoa(self):
+        assert _precip_mm_to_wmo(0.1) == 51
+
+    def test_chuva_leve(self):
+        assert _precip_mm_to_wmo(0.5) == 61
+
+    def test_chuva_moderada(self):
+        assert _precip_mm_to_wmo(5.0) == 63
+
+    def test_chuva_forte(self):
+        assert _precip_mm_to_wmo(25.0) == 65
+
+    def test_very_heavy_rain(self):
+        assert _precip_mm_to_wmo(50.0) == 65

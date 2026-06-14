@@ -866,7 +866,7 @@
       latitude: lat.toFixed(4), longitude: lon.toFixed(4),
       hourly: 'temperature_2m,relativehumidity_2m,apparent_temperature,precipitation_probability,weathercode,surface_pressure,visibility,uv_index,dewpoint_2m,windspeed_10m,winddirection_10m,windgusts_10m',
       daily: 'weathercode,temperature_2m_max,temperature_2m_min,precipitation_sum,precipitation_probability_max,uv_index_max,windspeed_10m_max,sunrise,sunset',
-      current_weather: 'true',
+      current: 'weather_code,precipitation,temperature_2m,relative_humidity_2m,apparent_temperature,wind_speed_10m,wind_direction_10m,wind_gusts_10m,surface_pressure,visibility,uv_index,is_day',
       timezone: 'America/Sao_Paulo',
       forecast_days: '7',
     });
@@ -891,10 +891,20 @@
     const stCode  = (cd.principalSubdivisionCode || '').replace(/^BR-/, '');
     const cityName = city && stCode ? `${city}, ${stCode}` : city || 'Uberlândia, MG';
 
-    const cw     = wx.current_weather || {};
+    const cw     = wx.current || {};
     const daily  = wx.daily  || {};
     const hourly = wx.hourly || {};
-    const code   = cw.weathercode ?? 0;
+    const rawCode = cw.weather_code ?? 0;
+    // Override with precipitation field when model code doesn't indicate rain
+    function precipToWmo(mm) {
+      if (mm == null || mm < 0.1) return null;
+      if (mm >= 25) return 65;
+      if (mm >= 5)  return 63;
+      if (mm >= 0.5) return 61;
+      return 51;
+    }
+    const rainCode = precipToWmo(cw.precipitation);
+    const code = (rainCode && rawCode < 51) ? rainCode : rawCode;
 
     const cwTime = (cw.time || '').slice(0, 13);
     const hTimes = hourly.time || [];
@@ -956,24 +966,24 @@
       sunset:  dSunset[i]  ? dSunset[i].slice(11, 16)  : null,
     }));
 
-    const visM = h('visibility');
+    const visM = cw.visibility ?? h('visibility');
     return {
       city: cityName,
       source: 'open-meteo',
       reliability: 'padrão',
       current: {
-        temp:          cw.temperature != null ? Math.round(cw.temperature) : null,
-        feels_like:    h('apparent_temperature') != null ? Math.round(h('apparent_temperature')) : null,
-        humidity:      h('relativehumidity_2m'),
-        wind_kph:      cw.windspeed != null ? Math.round(cw.windspeed) : null,
-        wind_dir:      bearingDir(cw.winddirection),
-        wind_gust_kph: h('windgusts_10m') != null ? Math.round(h('windgusts_10m')) : null,
+        temp:          cw.temperature_2m != null ? Math.round(cw.temperature_2m) : null,
+        feels_like:    cw.apparent_temperature != null ? Math.round(cw.apparent_temperature) : null,
+        humidity:      cw.relative_humidity_2m ?? null,
+        wind_kph:      cw.wind_speed_10m != null ? Math.round(cw.wind_speed_10m) : null,
+        wind_dir:      bearingDir(cw.wind_direction_10m),
+        wind_gust_kph: cw.wind_gusts_10m != null ? Math.round(cw.wind_gusts_10m) : null,
         condition:     WMO_PT[code] || '',
         code,
         visibility_km: visM != null ? Math.round(visM / 100) / 10 : null,
-        pressure_mb:   h('surface_pressure') != null ? Math.round(h('surface_pressure')) : null,
+        pressure_mb:   cw.surface_pressure != null ? Math.round(cw.surface_pressure) : null,
         dew_point:     h('dewpoint_2m') != null ? Math.round(h('dewpoint_2m')) : null,
-        uv_index:      h('uv_index') != null ? Math.round(h('uv_index') * 10) / 10 : null,
+        uv_index:      cw.uv_index != null ? Math.round(cw.uv_index * 10) / 10 : null,
         is_day:        !!cw.is_day,
       },
       today:  { sunrise, sunset, uv_max: uvMax, aqi: aqiVal != null ? Math.round(aqiVal) : null, aqi_label: aqiLabel, pm25 },

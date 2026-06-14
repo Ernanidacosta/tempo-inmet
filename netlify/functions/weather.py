@@ -267,6 +267,19 @@ def _cloud_to_wmo(lcdc_pct, apcp_mm):
     return 0        # clear sky
 
 
+def _precip_mm_to_wmo(mm):
+    """Map hourly precipitation (mm) → WMO rain code; None if < 0.1 mm."""
+    if mm is None or mm < 0.1:
+        return None
+    if mm >= 25.0:
+        return 65   # chuva forte
+    if mm >= 5.0:
+        return 63   # chuva moderada
+    if mm >= 0.5:
+        return 61   # chuva leve
+    return 51       # garoa
+
+
 def _fetch_eta_current(lat, lon):
     """
     Fetch current surface conditions from CPTEC ETA 8km GRIB2 model.
@@ -338,7 +351,7 @@ def _fetch_open_meteo(lat, lon):
         'latitude': f'{lat:.4f}', 'longitude': f'{lon:.4f}',
         'hourly': 'temperature_2m,relativehumidity_2m,apparent_temperature,precipitation_probability,precipitation,weathercode,surface_pressure,visibility,uv_index,dewpoint_2m,windspeed_10m,winddirection_10m,windgusts_10m',
         'daily': 'weathercode,temperature_2m_max,temperature_2m_min,precipitation_sum,precipitation_probability_max,windspeed_10m_max,sunrise,sunset,uv_index_max',
-        'current_weather': 'true',
+        'current': 'weather_code,precipitation,temperature_2m,relative_humidity_2m,apparent_temperature,wind_speed_10m,wind_direction_10m,wind_gusts_10m,surface_pressure,visibility,uv_index,is_day',
         'timezone': 'America/Sao_Paulo',
         'forecast_days': '7',
     })
@@ -393,7 +406,7 @@ def _fetch_cptec(city_name_raw):
 # ── merge ──────────────────────────────────────────────────────────────────
 
 def _merge(city_name, wx, aq, cptec_days, eta_current=None):
-    cw     = wx.get('current_weather', {})
+    cw     = wx.get('current', {})
     daily  = wx.get('daily', {})
     hourly = wx.get('hourly', {})
 
@@ -405,8 +418,13 @@ def _merge(city_name, wx, aq, cptec_days, eta_current=None):
         arr = hourly.get(key) or []
         return arr[hi] if hi < len(arr) else None
 
-    code    = int(cw.get('weathercode', 0))
-    vis_m   = h('visibility')
+    code = int(cw.get('weather_code', 0))
+    # If current precipitation > threshold but model code doesn't indicate rain, override
+    curr_precip = cw.get('precipitation')
+    rain_code   = _precip_mm_to_wmo(curr_precip)
+    if rain_code and code < 51:
+        code = rain_code
+    vis_m   = cw.get('visibility') or h('visibility')
     vis_km  = round(vis_m / 1000, 1) if vis_m is not None else None
 
     # Air quality
@@ -500,20 +518,20 @@ def _merge(city_name, wx, aq, cptec_days, eta_current=None):
         reliability = 'padrão'
 
     # Current conditions (Open-Meteo base)
-    wd = cw.get('winddirection')
+    wd = cw.get('wind_direction_10m')
     current = {
-        'temp':          _rnd(cw.get('temperature')),
-        'feels_like':    _rnd(h('apparent_temperature')),
-        'humidity':      _int(h('relativehumidity_2m')),
-        'wind_kph':      _rnd(cw.get('windspeed')),
+        'temp':          _rnd(cw.get('temperature_2m')),
+        'feels_like':    _rnd(cw.get('apparent_temperature')),
+        'humidity':      _int(cw.get('relative_humidity_2m')),
+        'wind_kph':      _rnd(cw.get('wind_speed_10m')),
         'wind_dir':      _bearing(wd) if wd is not None else None,
-        'wind_gust_kph': _rnd(h('windgusts_10m')),
+        'wind_gust_kph': _rnd(cw.get('wind_gusts_10m')),
         'condition':     WMO_CONDITIONS.get(code, ''),
         'code':          code,
         'visibility_km': vis_km,
-        'pressure_mb':   _rnd(h('surface_pressure')),
+        'pressure_mb':   _rnd(cw.get('surface_pressure')),
         'dew_point':     _rnd(h('dewpoint_2m')),
-        'uv_index':      _round1(h('uv_index')),
+        'uv_index':      _round1(cw.get('uv_index')),
         'is_day':        bool(cw.get('is_day', 1)),
     }
 
