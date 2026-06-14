@@ -1,11 +1,10 @@
 import json
-import math
-import struct
+import os
 import unicodedata
 import urllib.request
 import urllib.parse
 import xml.etree.ElementTree as ET
-from datetime import datetime, timezone, timedelta
+from datetime import datetime
 
 DAYS_PT = ['Dom', 'Seg', 'Ter', 'Qua', 'Qui', 'Sex', 'Sáb']
 
@@ -60,20 +59,16 @@ BR_STATES = {
     'Santa Catarina': 'SC', 'São Paulo': 'SP', 'Sergipe': 'SE', 'Tocantins': 'TO',
 }
 
-# ── ETA GRIB2 constants ────────────────────────────────────────────────────
-
-_ETA_BASE = "https://dataserver.cptec.inpe.br/dataserver_modelos/eta/ams_08km/brutos"
-
-# Variables to fetch: (inventory key, output attribute)
-_ETA_VARS = [
-    ('TMP:2 m above ground',   'tmp_k'),
-    ('RH:2 m above ground',    'rh'),
-    ('UGRD:10 m above ground', 'ugrd'),
-    ('VGRD:10 m above ground', 'vgrd'),
-    ('PRES:surface',           'pres_pa'),
-    ('APCP:surface',           'apcp_mm'),
-    ('LCDC:surface',           'lcdc_pct'),
-]
+# Tomorrow.io weatherCode → WMO (free-tier field)
+_TIO_TO_WMO = {
+    1000: 0, 1100: 0, 1101: 2, 1102: 3, 1001: 3,
+    2000: 45, 2100: 45,
+    4000: 51, 4001: 61, 4200: 61, 4201: 65,
+    5000: 71, 5001: 71, 5100: 71, 5101: 75,
+    6000: 56, 6001: 66, 6200: 66, 6201: 67,
+    7000: 75, 7101: 75, 7102: 75,
+    8000: 95,
+}
 
 
 # ── handler ────────────────────────────────────────────────────────────────
@@ -102,11 +97,17 @@ def handler(event, context):
     except Exception:
         pass
 
-    eta_current = None
+    # Primary: OpenWeatherMap (station-observed); fallback: Tomorrow.io
+    obs_current = None
     try:
-        eta_current = _fetch_eta_current(lat, lon)
+        obs_current = _fetch_owm(lat, lon)
     except Exception:
         pass
+    if obs_current is None:
+        try:
+            obs_current = _fetch_tomorrowio(lat, lon)
+        except Exception:
+            pass
 
     return {
         'statusCode': 200,
@@ -115,236 +116,102 @@ def handler(event, context):
             'Access-Control-Allow-Origin': '*',
         },
         'body': json.dumps(
-            _merge(city_name, wx_raw, aq_raw, cptec_days, eta_current),
+            _merge(city_name, wx_raw, aq_raw, cptec_days, obs_current),
             ensure_ascii=False,
         ),
     }
 
 
-# ── ETA GRIB2 integration ──────────────────────────────────────────────────
+# ── observation sources ────────────────────────────────────────────────────
 
-def _eta_run_dt(now_utc):
-    """Latest available ETA 00Z run (ready ~7h after initialization)."""
-    run = now_utc.replace(hour=0, minute=0, second=0, microsecond=0)
-    if now_utc.hour < 7:
-        run -= timedelta(days=1)
-    return run
+def _owm_id_to_wmo(owm_id, precip_mm=None):
+    """Map OpenWeatherMap condition ID + optional rain.1h (mm) → WMO code."""
+    if 200 <= owm_id <= 232:
+        return 95   # trovoada
+    if 300 <= owm_id <= 321:
+        return 51   # garoa
+    if 500 <= owm_id <= 531:
+        return _precip_mm_to_wmo(precip_mm) or 61   # chuva
+    if 600 <= owm_id <= 622:
+        return 71   # neve
+    if 700 <= owm_id <= 771:
+        return 45   # névoa / neblina
+    if owm_id == 800:
+        return 0
+    if owm_id == 801:
+        return 1
+    if owm_id in (802, 803):
+        return 2
+    return 3  # 804 overcast + default
 
 
-def _parse_inv(text):
+def _fetch_owm(lat, lon):
     """
-    Parse wgrib2 .inv file.
-    Returns {var_key: (byte_start, byte_end)} mapping.
+    OpenWeatherMap /weather — station + radar blend.
+    Returns obs dict or None when OWM_KEY is absent / call fails.
     """
-    entries = []
-    for line in text.strip().splitlines():
-        p = line.split(':')
-        if len(p) >= 5:
-            try:
-                entries.append((int(p[1]), f'{p[3]}:{p[4]}'))
-            except ValueError:
-                pass
-    result = {}
-    for i, (offset, key) in enumerate(entries):
-        end = entries[i + 1][0] - 1 if i + 1 < len(entries) else offset + 5_000_000
-        result[key] = (offset, end)
-    return result
-
-
-def _range_get(url, start, end, timeout=9):
-    """HTTP Range request — returns only bytes [start, end] of a remote file."""
-    req = urllib.request.Request(
-        url,
-        headers={'Range': f'bytes={start}-{end}', 'User-Agent': 'tempo-app/1.0'},
+    key = os.environ.get('OWM_KEY', '')
+    if not key:
+        return None
+    data = _get_json(
+        f'https://api.openweathermap.org/data/2.5/weather'
+        f'?lat={lat:.4f}&lon={lon:.4f}&appid={key}&units=metric',
+        timeout=6,
     )
-    with urllib.request.urlopen(req, timeout=timeout) as r:
-        return r.read()
-
-
-def _grib2_nearest(msg: bytes, lat: float, lon: float):
-    """
-    Pure-Python GRIB2 decoder.
-    Extracts the value at the nearest grid point for a single message.
-    Handles regular lat/lon grid (template 3.0) + simple packing (template 5.0).
-    Returns float or None on failure.
-    """
-    if len(msg) < 16 or msg[:4] != b'GRIB' or msg[7] != 2:
-        return None
-
-    pos = 16  # skip section 0 (always 16 bytes in GRIB2)
-    ni = nj = None
-    lat1 = lon1 = lat2 = lon2 = None
-    R = E = D = n_bits = None
-    sec7_start = None
-
-    while pos + 4 <= len(msg):
-        # End section is 4 ASCII '7' bytes, not a normal section
-        if msg[pos:pos + 4] == b'7777':
-            break
-
-        if pos + 5 > len(msg):
-            break
-        sec_len = struct.unpack('>I', msg[pos:pos + 4])[0]
-        if sec_len < 5 or pos + sec_len > len(msg):
-            break
-        sec_num = msg[pos + 4]
-
-        if sec_num == 3 and pos + 72 <= len(msg):
-            tpl = struct.unpack('>H', msg[pos + 12:pos + 14])[0]
-            if tpl == 0:  # regular lat/lon
-                ni  = struct.unpack('>I', msg[pos + 30:pos + 34])[0]
-                nj  = struct.unpack('>I', msg[pos + 34:pos + 38])[0]
-                lat1 = struct.unpack('>i', msg[pos + 46:pos + 50])[0] * 1e-6
-                lon1 = struct.unpack('>i', msg[pos + 50:pos + 54])[0] * 1e-6
-                lat2 = struct.unpack('>i', msg[pos + 55:pos + 59])[0] * 1e-6
-                lon2 = struct.unpack('>i', msg[pos + 59:pos + 63])[0] * 1e-6
-
-        elif sec_num == 5 and pos + 21 <= len(msg):
-            tpl = struct.unpack('>H', msg[pos + 9:pos + 11])[0]
-            if tpl == 0:  # simple packing
-                R      = struct.unpack('>f', msg[pos + 11:pos + 15])[0]
-                E      = struct.unpack('>h', msg[pos + 15:pos + 17])[0]
-                D      = struct.unpack('>h', msg[pos + 17:pos + 19])[0]
-                n_bits = msg[pos + 19]
-
-        elif sec_num == 7:
-            sec7_start = pos + 5  # data starts 5 bytes into section 7
-
-        pos += sec_len
-
-    if None in (ni, nj, lat1, lon1, lat2, lon2, R, n_bits, sec7_start):
-        return None
-
-    # Normalise longitude to match grid convention (0-360 or -180/180)
-    if lon1 > 180:
-        lon1 -= 360
-    if lon2 > 180:
-        lon2 -= 360
-    req_lon = lon + 360 if lon < lon1 and lon1 > -180 else lon
-
-    dlat = (lat2 - lat1) / (nj - 1) if nj > 1 else 1.0
-    dlon = (lon2 - lon1) / (ni - 1) if ni > 1 else 1.0
-
-    i = max(0, min(ni - 1, round((req_lon - lon1) / dlon)))
-    j = max(0, min(nj - 1, round((lat - lat1) / dlat)))
-    idx = j * ni + i
-
-    if n_bits == 0:
-        return float(R) / (10.0 ** D)
-
-    # Unpack bit-packed integer at index idx
-    bit_pos  = idx * n_bits
-    byte_pos = sec7_start + bit_pos // 8
-    bit_off  = bit_pos % 8
-    n_bytes  = (bit_off + n_bits + 7) // 8
-
-    if byte_pos + n_bytes > len(msg):
-        return None
-
-    raw    = int.from_bytes(msg[byte_pos:byte_pos + n_bytes], 'big')
-    shift  = n_bytes * 8 - bit_off - n_bits
-    packed = (raw >> shift) & ((1 << n_bits) - 1)
-
-    return (R + packed * (2.0 ** E)) / (10.0 ** D)
-
-
-def _cloud_to_wmo(lcdc_pct, apcp_mm):
-    """Map low-cloud-cover % + 1h precipitation mm → WMO weather code."""
-    mm = apcp_mm or 0.0
-    if mm > 5.0:
-        return 63   # moderate rain
-    if mm > 1.0:
-        return 61   # light rain
-    if mm > 0.1:
-        return 51   # drizzle
-    pct = lcdc_pct or 0.0
-    if pct > 75:
-        return 3    # overcast
-    if pct > 40:
-        return 2    # partly cloudy
-    if pct > 15:
-        return 1    # mostly clear
-    return 0        # clear sky
-
-
-def _precip_mm_to_wmo(mm):
-    """Map hourly precipitation (mm) → WMO rain code; None if < 0.1 mm."""
-    if mm is None or mm < 0.1:
-        return None
-    if mm >= 25.0:
-        return 65   # chuva forte
-    if mm >= 5.0:
-        return 63   # chuva moderada
-    if mm >= 0.5:
-        return 61   # chuva leve
-    return 51       # garoa
-
-
-def _fetch_eta_current(lat, lon):
-    """
-    Fetch current surface conditions from CPTEC ETA 8km GRIB2 model.
-    Returns a dict with temp, humidity, wind, pressure, code — or None if
-    the model data is unavailable or decoding fails.
-    """
-    now = datetime.now(timezone.utc)
-    run_dt  = _eta_run_dt(now)
-    run_str = run_dt.strftime('%Y%m%d00')
-
-    h_now = max(0, min(48, int((now - run_dt).total_seconds() / 3600)))
-    valid_dt  = run_dt + timedelta(hours=h_now)
-    valid_str = valid_dt.strftime('%Y%m%d%H')
-
-    base  = f"{_ETA_BASE}/{run_dt.strftime('%Y/%m/%d')}/00"
-    fname = f"Eta_ams_08km_{run_str}_{valid_str}"
-
-    try:
-        inv_raw = _get_raw(f"{base}/{fname}.inv", timeout=5)
-        inv_text = inv_raw.decode('utf-8', errors='replace')
-    except Exception:
-        return None
-
-    offsets  = _parse_inv(inv_text)
-    grib_url = f"{base}/{fname}.grib2"
-
-    raw = {}
-    for var_key, attr in _ETA_VARS:
-        if var_key not in offsets:
-            raw[attr] = None
-            continue
-        start, end = offsets[var_key]
-        try:
-            msg = _range_get(grib_url, start, end, timeout=9)
-            raw[attr] = _grib2_nearest(msg, lat, lon)
-        except Exception:
-            raw[attr] = None
-
-    if raw.get('tmp_k') is None:
-        return None
-
-    tmp_c   = round(raw['tmp_k'] - 273.15)
-    rh      = round(raw['rh']) if raw.get('rh') is not None else None
-    ugrd    = raw.get('ugrd') or 0.0
-    vgrd    = raw.get('vgrd') or 0.0
-    wspd_ms = math.sqrt(ugrd ** 2 + vgrd ** 2)
-    wspd_kh = round(wspd_ms * 3.6)
-    wdir    = round((270 - math.degrees(math.atan2(vgrd, ugrd))) % 360)
-    pres_pa = raw.get('pres_pa')
-    apcp    = raw.get('apcp_mm') or 0.0
-    lcdc    = raw.get('lcdc_pct')
-    code    = _cloud_to_wmo(lcdc, apcp)
-
+    m        = data.get('main', {})
+    w        = data.get('wind', {})
+    ow       = (data.get('weather') or [{}])[0]
+    rain_mm  = data.get('rain', {}).get('1h', 0.0) or 0.0
+    wmo      = _owm_id_to_wmo(ow.get('id', 800), rain_mm)
+    wd       = w.get('deg')
     return {
-        'temp':        tmp_c,
-        'humidity':    rh,
-        'wind_kph':    wspd_kh,
-        'wind_dir':    _bearing(wdir),
-        'pressure_mb': round(pres_pa / 100) if pres_pa else None,
-        'code':        code,
-        'condition':   WMO_CONDITIONS.get(code, ''),
+        'source_type':   'owm',
+        'temp':          _rnd(m.get('temp')),
+        'feels_like':    _rnd(m.get('feels_like')),
+        'humidity':      _int(m.get('humidity')),
+        'wind_kph':      _rnd((w.get('speed') or 0) * 3.6),
+        'wind_dir':      _bearing(wd) if wd is not None else None,
+        'wind_gust_kph': _rnd((w.get('gust') or 0) * 3.6),
+        'pressure_mb':   _rnd(m.get('pressure')),
+        'visibility_km': _round1((data.get('visibility') or 0) / 1000),
+        'code':          wmo,
+        'condition':     WMO_CONDITIONS.get(wmo, ''),
     }
 
 
-# ── CPTEC XML ──────────────────────────────────────────────────────────────
+def _fetch_tomorrowio(lat, lon):
+    """
+    Tomorrow.io realtime — satellite + microwave links (works without radar).
+    Uses precipitationIntensity (free-tier field).
+    Returns obs dict or None when TOMORROWIO_KEY is absent / call fails.
+    """
+    key = os.environ.get('TOMORROWIO_KEY', '')
+    if not key:
+        return None
+    fields = ('precipitationIntensity,temperature,humidity,'
+              'windSpeed,windDirection,windGust,weatherCode')
+    data = _get_json(
+        f'https://api.tomorrow.io/v4/weather/realtime'
+        f'?location={lat:.4f},{lon:.4f}&fields={fields}&units=metric&apikey={key}',
+        timeout=6,
+    )
+    v      = data.get('data', {}).get('values', {})
+    precip = v.get('precipitationIntensity') or 0.0
+    wmo    = _precip_mm_to_wmo(precip) or _TIO_TO_WMO.get(v.get('weatherCode', 1000), 3)
+    wd     = v.get('windDirection')
+    return {
+        'source_type':   'tomorrowio',
+        'temp':          _rnd(v.get('temperature')),
+        'humidity':      _int(v.get('humidity')),
+        'wind_kph':      _rnd((v.get('windSpeed') or 0) * 3.6),
+        'wind_dir':      _bearing(wd) if wd is not None else None,
+        'wind_gust_kph': _rnd((v.get('windGust') or 0) * 3.6),
+        'code':          wmo,
+        'condition':     WMO_CONDITIONS.get(wmo, ''),
+    }
+
+
+# ── Open-Meteo + CPTEC ────────────────────────────────────────────────────
 
 def _fetch_open_meteo(lat, lon):
     qs = urllib.parse.urlencode({
@@ -403,9 +270,24 @@ def _fetch_cptec(city_name_raw):
     return days
 
 
+# ── precipitation helper ───────────────────────────────────────────────────
+
+def _precip_mm_to_wmo(mm):
+    """Map hourly precipitation (mm) → WMO rain code; None if < 0.1 mm."""
+    if mm is None or mm < 0.1:
+        return None
+    if mm >= 25.0:
+        return 65   # chuva forte
+    if mm >= 5.0:
+        return 63   # chuva moderada
+    if mm >= 0.5:
+        return 61   # chuva leve
+    return 51       # garoa
+
+
 # ── merge ──────────────────────────────────────────────────────────────────
 
-def _merge(city_name, wx, aq, cptec_days, eta_current=None):
+def _merge(city_name, wx, aq, cptec_days, obs_current=None):
     cw     = wx.get('current', {})
     daily  = wx.get('daily', {})
     hourly = wx.get('hourly', {})
@@ -419,13 +301,13 @@ def _merge(city_name, wx, aq, cptec_days, eta_current=None):
         return arr[hi] if hi < len(arr) else None
 
     code = int(cw.get('weather_code', 0))
-    # If current precipitation > threshold but model code doesn't indicate rain, override
+    # Open-Meteo precipitation override (model-based, kept as safety net)
     curr_precip = cw.get('precipitation')
     rain_code   = _precip_mm_to_wmo(curr_precip)
     if rain_code and code < 51:
         code = rain_code
-    vis_m   = cw.get('visibility') or h('visibility')
-    vis_km  = round(vis_m / 1000, 1) if vis_m is not None else None
+    vis_m  = cw.get('visibility') or h('visibility')
+    vis_km = round(vis_m / 1000, 1) if vis_m is not None else None
 
     # Air quality
     aqi_val = pm25 = aqi_label = None
@@ -535,14 +417,20 @@ def _merge(city_name, wx, aq, cptec_days, eta_current=None):
         'is_day':        bool(cw.get('is_day', 1)),
     }
 
-    # Override current conditions with ETA 8km when available
-    if eta_current:
-        for key in ('temp', 'humidity', 'wind_kph', 'wind_dir',
-                    'pressure_mb', 'code', 'condition'):
-            if eta_current.get(key) is not None:
-                current[key] = eta_current[key]
-        source      = f'eta+{source}'
-        reliability = 'alta'
+    # Override with observation-based current (OWM primary, Tomorrow.io fallback)
+    if obs_current:
+        obs_keys = ('temp', 'feels_like', 'humidity', 'wind_kph', 'wind_dir',
+                    'wind_gust_kph', 'pressure_mb', 'visibility_km', 'code', 'condition')
+        for key in obs_keys:
+            if obs_current.get(key) is not None:
+                current[key] = obs_current[key]
+        if obs_current.get('source_type') == 'owm':
+            source      = f'owm+{source}'
+            reliability = 'alta'
+        else:
+            source      = f'tomorrowio+{source}'
+            if reliability == 'padrão':
+                reliability = 'boa'
 
     return {
         'city':        city_name,

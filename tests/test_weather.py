@@ -1,76 +1,12 @@
 import json
-import struct
-from datetime import datetime, timezone
 from weather import (
     _rnd, _flt, _int, _parse_day, _bearing, _err, _round1,
     _text, _find_hour_idx, _merge,
-    _parse_inv, _grib2_nearest, _cloud_to_wmo, _eta_run_dt,
-    _precip_mm_to_wmo,
+    _precip_mm_to_wmo, _owm_id_to_wmo,
+    _TIO_TO_WMO,
     COND_MAP, WMO_CONDITIONS, DAYS_PT, BR_STATES,
 )
 import xml.etree.ElementTree as ET
-
-
-# ── synthetic GRIB2 helpers ───────────────────────────────────────────────
-
-def _pack_bits(values, n_bits):
-    """Pack unsigned ints into a big-endian bitstream."""
-    result = 0
-    for v in values:
-        result = (result << n_bits) | (v & ((1 << n_bits) - 1))
-    total_bits = len(values) * n_bits
-    n_bytes = (total_bits + 7) // 8
-    result <<= (n_bytes * 8 - total_bits)
-    return result.to_bytes(n_bytes, 'big')
-
-
-def _make_grib2(ni, nj, lat1, lon1, lat2, lon2, values, n_bits=16, R=0.0, E=0, D=0):
-    """Build a minimal valid GRIB2 message (template 3.0 + simple packing 5.0)."""
-
-    def i32(v):  return struct.pack('>i', int(round(v * 1e6)))
-    def u32(v):  return struct.pack('>I', int(v))
-    def i16(v):  return struct.pack('>h', int(v))
-    def u16(v):  return struct.pack('>H', int(v))
-    def f32(v):  return struct.pack('>f', float(v))
-
-    # Section 1 – identification (21 bytes): length(4) + sec_num(1) + 16 filler bytes
-    s1 = struct.pack('>IB', 21, 1) + bytes(16)
-
-    # Section 3 – grid definition template 3.0 (72 bytes total)
-    s3_tpl = (
-        bytes([0]) + bytes([0]) + u32(0) +   # shape, sf radius, radius
-        bytes([0]) + u32(0) +                 # sf major, major
-        bytes([0]) + u32(0) +                 # sf minor, minor
-        u32(ni) + u32(nj) +
-        u32(0) + u32(0) +                     # basic angle = 0 → 1e-6 deg
-        i32(lat1) + i32(lon1) +
-        bytes([0x30]) +
-        i32(lat2) + i32(lon2) +
-        u32(int(abs(lon2 - lon1) / max(ni - 1, 1) * 1e6)) +
-        u32(int(abs(lat2 - lat1) / max(nj - 1, 1) * 1e6)) +
-        bytes([0x00])                         # scanning mode
-    )
-    s3 = (struct.pack('>IB', 14 + len(s3_tpl), 3) +
-          bytes([0]) + u32(ni * nj) + bytes([0, 0]) + u16(0) + s3_tpl)
-
-    # Section 4 – product definition template 4.0 (34 bytes)
-    s4 = struct.pack('>IBH', 34, 4, 0) + bytes(34 - 7)
-
-    # Section 5 – data representation template 5.0 (21 bytes)
-    s5 = (struct.pack('>IBI', 21, 5, ni * nj) + u16(0) +
-          f32(R) + i16(E) + i16(D) + bytes([n_bits, 0]))
-
-    # Section 6 – no bitmap (6 bytes)
-    s6 = struct.pack('>IB', 6, 6) + bytes([255])
-
-    # Section 7 – packed data
-    packed = _pack_bits(values, n_bits)
-    s7 = struct.pack('>IB', 5 + len(packed), 7) + packed
-
-    body = s1 + s3 + s4 + s5 + s6 + s7 + b'7777'
-    total = 16 + len(body)
-    s0 = b'GRIB' + bytes([0, 0, 0, 2]) + struct.pack('>Q', total)
-    return s0 + body
 
 
 # ── synthetic Open-Meteo response ─────────────────────────────────────────
@@ -289,123 +225,6 @@ class TestErrHelper:
         assert _err(404, "x")["headers"]["Content-Type"] == "application/json"
 
 
-class TestParseInv:
-    def test_basic_parsing(self):
-        inv = "1:0:d=2026061400:TMP:2 m above ground:anl:\n2:500:d=2026061400:RH:2 m above ground:anl:\n"
-        result = _parse_inv(inv)
-        assert 'TMP:2 m above ground' in result
-        assert result['TMP:2 m above ground'] == (0, 499)
-
-    def test_rh_key(self):
-        inv = "1:0:d=2026061400:TMP:surface:anl:\n2:1000:d=2026061400:RH:2 m above ground:anl:\n"
-        result = _parse_inv(inv)
-        assert result['RH:2 m above ground'] == (1000, 1000 + 5_000_000)
-
-    def test_last_entry_large_end(self):
-        inv = "1:0:d=2026061400:TMP:surface:anl:\n"
-        _, end = _parse_inv(inv)['TMP:surface']
-        assert end > 1_000_000
-
-    def test_empty_returns_empty(self):
-        assert _parse_inv('') == {}
-
-    def test_real_inv_format(self):
-        inv = (
-            "6:1225293:d=2026061400:PRES:surface:anl:\n"
-            "7:1617830:d=2026061400:TMP:2 m above ground:anl:\n"
-            "8:2096079:d=2026061400:TMAX:surface:anl:\n"
-        )
-        result = _parse_inv(inv)
-        assert result['PRES:surface'] == (1225293, 1617829)
-        assert result['TMP:2 m above ground'] == (1617830, 2096078)
-
-
-class TestGrib2Nearest:
-    def test_invalid_empty(self):
-        assert _grib2_nearest(b'', -18.9, -48.3) is None
-
-    def test_not_grib_magic(self):
-        assert _grib2_nearest(b'ABCD' + b'\x00' * 20, -18.9, -48.3) is None
-
-    def test_grib1_rejected(self):
-        msg = b'GRIB' + bytes([0, 0, 0, 1]) + b'\x00' * 8
-        assert _grib2_nearest(msg, -18.9, -48.3) is None
-
-    def test_2x2_grid_center(self):
-        # 2×2 grid: lat 0–10°N, lon -50 to -40°E, values 0–3
-        values = [0, 1, 2, 3]  # packed as 8-bit ints
-        msg = _make_grib2(2, 2, 0.0, -50.0, 10.0, -40.0, values, n_bits=8, R=0.0, E=0, D=0)
-        # (7, -43): i=round(0.7)=1, j=round(0.7)=1 → idx=3 → value=3
-        result = _grib2_nearest(msg, 7.0, -43.0)
-        assert result is not None
-        assert abs(result - 3.0) < 1.0
-
-    def test_temperature_kelvin_decode(self):
-        # 3×1 grid along lat axis; encode 300K, 302K, 305K as 16-bit with R=300, E=0, D=0
-        raw = [0, 2, 5]
-        msg = _make_grib2(3, 1, -20.0, -49.0, -20.0, -47.0, raw, n_bits=16, R=300.0, E=0, D=0)
-        val = _grib2_nearest(msg, -20.0, -48.0)  # middle point → 302K
-        assert val is not None
-        assert abs(val - 302.0) < 0.5
-
-    def test_single_point_grid(self):
-        msg = _make_grib2(1, 1, -18.9, -48.3, -18.9, -48.3, [42], n_bits=8, R=0.0, E=0, D=0)
-        val = _grib2_nearest(msg, -18.9, -48.3)
-        assert val is not None
-        assert abs(val - 42.0) < 1.0
-
-
-class TestCloudToWmo:
-    def test_heavy_rain(self):
-        assert _cloud_to_wmo(80.0, 10.0) == 63
-
-    def test_light_rain(self):
-        assert _cloud_to_wmo(60.0, 1.5) == 61
-
-    def test_drizzle(self):
-        assert _cloud_to_wmo(70.0, 0.3) == 51
-
-    def test_overcast_no_rain(self):
-        assert _cloud_to_wmo(90.0, 0.0) == 3
-
-    def test_partly_cloudy(self):
-        assert _cloud_to_wmo(50.0, 0.0) == 2
-
-    def test_mostly_clear(self):
-        assert _cloud_to_wmo(20.0, 0.0) == 1
-
-    def test_clear(self):
-        assert _cloud_to_wmo(5.0, 0.0) == 0
-
-    def test_none_cloud_defaults_clear(self):
-        assert _cloud_to_wmo(None, 0.0) == 0
-
-    def test_none_precip_uses_cloud(self):
-        assert _cloud_to_wmo(80.0, None) == 3
-
-
-class TestEtaRunDt:
-    def test_afternoon_uses_same_day(self):
-        now = datetime(2026, 6, 14, 15, 0, tzinfo=timezone.utc)
-        run = _eta_run_dt(now)
-        assert run.year == 2026 and run.month == 6 and run.day == 14
-
-    def test_early_morning_uses_previous_day(self):
-        now = datetime(2026, 6, 14, 4, 0, tzinfo=timezone.utc)
-        run = _eta_run_dt(now)
-        assert run.day == 13
-
-    def test_exactly_7h_uses_same_day(self):
-        now = datetime(2026, 6, 14, 7, 0, tzinfo=timezone.utc)
-        run = _eta_run_dt(now)
-        assert run.day == 14
-
-    def test_run_always_midnight(self):
-        now = datetime(2026, 6, 14, 20, 30, tzinfo=timezone.utc)
-        run = _eta_run_dt(now)
-        assert run.hour == 0 and run.minute == 0
-
-
 class TestDailyFields:
     """Verify _merge adds wind_max_kph, sunrise, sunset to every daily entry."""
 
@@ -446,50 +265,6 @@ class TestDailyFields:
         assert result['daily'][1]['sunset'] == '18:30'
 
 
-class TestReliability:
-    def test_open_meteo_only_is_padrao(self):
-        r = _merge('X', _fake_wx(2), None, None)
-        assert r['reliability'] == 'padrão'
-
-    def test_cptec_path_is_boa(self):
-        cptec = [{'day': 'Hoje', 'code': 0, 'condition': 'Sol', 'max': 30, 'min': 18, 'uv_cptec': 5.0}]
-        r = _merge('X', _fake_wx(1), None, cptec)
-        assert r['reliability'] == 'boa'
-
-    def test_eta_override_is_alta(self):
-        eta = {'temp': 27, 'humidity': 60, 'wind_kph': 15, 'wind_dir': 'NE',
-               'pressure_mb': 1012, 'code': 1, 'condition': 'Predominantemente limpo'}
-        r = _merge('X', _fake_wx(2), None, None, eta_current=eta)
-        assert r['reliability'] == 'alta'
-
-    def test_eta_overrides_current_temp(self):
-        eta = {'temp': 99, 'humidity': None, 'wind_kph': None, 'wind_dir': None,
-               'pressure_mb': None, 'code': 0, 'condition': 'Céu limpo'}
-        r = _merge('X', _fake_wx(2), None, None, eta_current=eta)
-        assert r['current']['temp'] == 99
-
-    def test_source_includes_eta_prefix(self):
-        eta = {'temp': 27, 'humidity': 60, 'wind_kph': 10, 'wind_dir': 'N',
-               'pressure_mb': 1010, 'code': 0, 'condition': 'Céu limpo'}
-        r = _merge('X', _fake_wx(2), None, None, eta_current=eta)
-        assert r['source'].startswith('eta+')
-
-
-class TestHandlerValidation:
-    def test_missing_params(self):
-        from weather import handler
-        assert handler({"queryStringParameters": {}}, None)["statusCode"] == 400
-
-    def test_invalid_coords(self):
-        from weather import handler
-        r = handler({"queryStringParameters": {"lat": "abc", "lon": "xyz"}}, None)
-        assert r["statusCode"] == 400
-
-    def test_none_params(self):
-        from weather import handler
-        assert handler({"queryStringParameters": None}, None)["statusCode"] == 400
-
-
 class TestPrecipMmToWmo:
     def test_none_returns_none(self):
         assert _precip_mm_to_wmo(None) is None
@@ -514,3 +289,122 @@ class TestPrecipMmToWmo:
 
     def test_very_heavy_rain(self):
         assert _precip_mm_to_wmo(50.0) == 65
+
+
+class TestOwmIdToWmo:
+    def test_clear(self):
+        assert _owm_id_to_wmo(800) == 0
+
+    def test_few_clouds(self):
+        assert _owm_id_to_wmo(801) == 1
+
+    def test_scattered_clouds(self):
+        assert _owm_id_to_wmo(802) == 2
+
+    def test_overcast(self):
+        assert _owm_id_to_wmo(804) == 3
+
+    def test_thunderstorm(self):
+        assert _owm_id_to_wmo(200) == 95
+        assert _owm_id_to_wmo(232) == 95
+
+    def test_drizzle(self):
+        assert _owm_id_to_wmo(300) == 51
+
+    def test_rain_with_precip(self):
+        assert _owm_id_to_wmo(500, 1.5) == 61   # chuva leve
+        assert _owm_id_to_wmo(502, 6.0) == 63   # chuva moderada
+
+    def test_rain_without_precip_defaults_to_61(self):
+        assert _owm_id_to_wmo(500) == 61
+
+    def test_snow(self):
+        assert _owm_id_to_wmo(600) == 71
+
+    def test_fog(self):
+        assert _owm_id_to_wmo(741) == 45
+
+
+class TestTioToWmo:
+    def test_clear(self):
+        assert _TIO_TO_WMO[1000] == 0
+
+    def test_cloudy(self):
+        assert _TIO_TO_WMO[1001] == 3
+
+    def test_light_rain(self):
+        assert _TIO_TO_WMO[4200] == 61
+
+    def test_heavy_rain(self):
+        assert _TIO_TO_WMO[4201] == 65
+
+    def test_thunderstorm(self):
+        assert _TIO_TO_WMO[8000] == 95
+
+    def test_fog(self):
+        assert _TIO_TO_WMO[2000] == 45
+
+
+class TestReliability:
+    def test_open_meteo_only_is_padrao(self):
+        r = _merge('X', _fake_wx(2), None, None)
+        assert r['reliability'] == 'padrão'
+
+    def test_cptec_path_is_boa(self):
+        cptec = [{'day': 'Hoje', 'code': 0, 'condition': 'Sol', 'max': 30, 'min': 18, 'uv_cptec': 5.0}]
+        r = _merge('X', _fake_wx(1), None, cptec)
+        assert r['reliability'] == 'boa'
+
+    def test_owm_obs_is_alta(self):
+        obs = {'source_type': 'owm', 'temp': 27, 'humidity': 60,
+               'wind_kph': 15, 'wind_dir': 'N', 'pressure_mb': 1012,
+               'code': 1, 'condition': 'Predominantemente limpo'}
+        r = _merge('X', _fake_wx(2), None, None, obs_current=obs)
+        assert r['reliability'] == 'alta'
+
+    def test_tomorrowio_obs_is_boa(self):
+        obs = {'source_type': 'tomorrowio', 'temp': 26, 'humidity': 70,
+               'wind_kph': 10, 'wind_dir': 'NE',
+               'code': 2, 'condition': 'Parcialmente nublado'}
+        r = _merge('X', _fake_wx(2), None, None, obs_current=obs)
+        assert r['reliability'] == 'boa'
+
+    def test_owm_overrides_current_temp(self):
+        obs = {'source_type': 'owm', 'temp': 99, 'code': 0,
+               'condition': 'Céu limpo'}
+        r = _merge('X', _fake_wx(2), None, None, obs_current=obs)
+        assert r['current']['temp'] == 99
+
+    def test_owm_source_string(self):
+        obs = {'source_type': 'owm', 'temp': 27, 'code': 0,
+               'condition': 'Céu limpo'}
+        r = _merge('X', _fake_wx(2), None, None, obs_current=obs)
+        assert r['source'].startswith('owm+')
+
+    def test_tomorrowio_with_cptec_stays_boa(self):
+        cptec = [{'day': 'Hoje', 'code': 0, 'condition': 'Sol', 'max': 30, 'min': 18, 'uv_cptec': 5.0}]
+        obs = {'source_type': 'tomorrowio', 'temp': 25, 'code': 61,
+               'condition': 'Chuva leve'}
+        r = _merge('X', _fake_wx(1), None, cptec, obs_current=obs)
+        assert r['reliability'] == 'boa'
+
+    def test_rain_code_overrides_clear_model(self):
+        obs = {'source_type': 'owm', 'temp': 23, 'code': 63,
+               'condition': 'Chuva moderada'}
+        r = _merge('X', _fake_wx(2), None, None, obs_current=obs)
+        assert r['current']['code'] == 63
+
+
+class TestHandlerValidation:
+    def test_missing_params(self):
+        from weather import handler
+        assert handler({"queryStringParameters": {}}, None)["statusCode"] == 400
+
+    def test_invalid_coords(self):
+        from weather import handler
+        r = handler({"queryStringParameters": {"lat": "abc", "lon": "xyz"}}, None)
+        assert r["statusCode"] == 400
+
+    def test_none_params(self):
+        from weather import handler
+        assert handler({"queryStringParameters": None}, None)["statusCode"] == 400
