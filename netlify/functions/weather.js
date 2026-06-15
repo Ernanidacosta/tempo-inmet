@@ -355,6 +355,20 @@ function merge(cityName, wx, aq, cptecDays, obsCurrent = null) {
     }
   }
 
+  // Reconciliação: OWM "céu limpo" não pode silenciar precipitação medida pelo Open-Meteo.
+  // Se o modelo vê ≥ 0.3mm na janela atual e a condição ainda aparece como "limpo/nublado",
+  // é porque a estação OWM (possivelmente distante) não captou a chuva local.
+  const modelPrecip = cw.precipitation ?? 0;
+  if (current.code < 51 && modelPrecip >= 0.3) {
+    const rc = precipMmToWmo(modelPrecip);
+    if (rc) { current.code = rc; current.condition = WMO_CONDITIONS[rc] || ''; }
+  }
+  // Fallback: se OWM não reportou rain.1h mas o modelo mede precipitação, propagar o valor
+  // para que o card de Chuva mostre mm/h em vez de "% chance".
+  if (!current.precip_now_mm && modelPrecip >= 0.1) {
+    current.precip_now_mm = Math.round(modelPrecip * 10) / 10;
+  }
+
   return {
     city: cityName,
     source,
