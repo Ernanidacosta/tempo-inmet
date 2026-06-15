@@ -54,44 +54,31 @@ exports.handler = async (event) => {
   const lon = Number.parseFloat(lonS);
   if (Number.isNaN(lat) || Number.isNaN(lon)) return err(400, 'coordenadas inválidas');
 
-  const cityName = await reverseGeocode(lat, lon);
-
-  let wxRaw;
-  let aqRaw;
+  // Round 1 — geocode + Open-Meteo em paralelo
+  let cityName, wxRaw, aqRaw;
   try {
-    [wxRaw, aqRaw] = await fetchOpenMeteo(lat, lon);
+    [cityName, [wxRaw, aqRaw]] = await Promise.all([
+      reverseGeocode(lat, lon),
+      fetchOpenMeteo(lat, lon),
+    ]);
   } catch (exc) {
     return err(500, `erro Open-Meteo: ${exc.message || exc}`);
   }
 
-  let cptecDays = null;
-  try {
-    const cityShort = cityName.split(',')[0].trim();
-    cptecDays = await fetchCptec(cityShort);
-  } catch (_) {
-    cptecDays = null;
-  }
-
-  let obsCurrent = null;
-  try {
-    obsCurrent = await fetchOwm(lat, lon);
-  } catch (_) {
-    obsCurrent = null;
-  }
-
-  if (!obsCurrent) {
-    try {
-      obsCurrent = await fetchTomorrowio(lat, lon);
-    } catch (_) {
-      obsCurrent = null;
-    }
-  }
+  // Round 2 — CPTEC + OWM/Tomorrow.io em paralelo
+  const [cptecDays, obsCurrent] = await Promise.all([
+    fetchCptec(cityName.split(',')[0].trim()).catch(() => null),
+    fetchOwm(lat, lon)
+      .then(r => r || fetchTomorrowio(lat, lon))
+      .catch(() => null),
+  ]);
 
   return {
     statusCode: 200,
     headers: {
       'Content-Type': 'application/json; charset=utf-8',
       'Access-Control-Allow-Origin': '*',
+      'Cache-Control': 'public, max-age=600',
     },
     body: JSON.stringify(merge(cityName, wxRaw, aqRaw, cptecDays, obsCurrent)),
   };
@@ -406,26 +393,18 @@ async function reverseGeocode(lat, lon) {
 }
 
 async function getJson(url, timeoutMs = 8000, headers = {}) {
-  const res = await fetchWithTimeout(url, timeoutMs, headers);
+  const res = await fetch(url, { signal: AbortSignal.timeout(timeoutMs), headers });
   if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
   return res.json();
 }
 
 async function getText(url, timeoutMs = 6000, encoding = 'utf-8') {
-  const res = await fetchWithTimeout(url, timeoutMs, { 'User-Agent': 'tempo-app/1.0' });
+  const res = await fetch(url, {
+    signal: AbortSignal.timeout(timeoutMs),
+    headers: { 'User-Agent': 'tempo-app/1.0' },
+  });
   if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
-  const buf = Buffer.from(await res.arrayBuffer());
-  return buf.toString(encoding);
-}
-
-async function fetchWithTimeout(url, timeoutMs, headers = {}) {
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), timeoutMs);
-  try {
-    return await fetch(url, { headers, signal: controller.signal });
-  } finally {
-    clearTimeout(timeout);
-  }
+  return Buffer.from(await res.arrayBuffer()).toString(encoding);
 }
 
 function extractBlocks(xml, tag) {

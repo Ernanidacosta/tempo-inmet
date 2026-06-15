@@ -1163,10 +1163,12 @@
       _map.setView([lat, lon], 9);
       if (_marker) _marker.setLatLng([lat, lon]);
     } else {
-      _map = L.map('radar-map', { zoomControl: true, attributionControl: false })
+      _map = L.map('radar-map', { zoomControl: true })
                .setView([lat, lon], 9);
-      L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 18 })
-       .addTo(_map);
+      L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+        maxZoom: 18,
+        attribution: '© <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>',
+      }).addTo(_map);
       _marker = L.marker([lat, lon]).addTo(_map);
     }
     _setOwmLayer(_activeMapLayer);
@@ -1182,10 +1184,11 @@
 
   function _setOwmLayer(layer) {
     if (_owmLayer) _map.removeLayer(_owmLayer);
-    _owmLayer = L.tileLayer(
-      `/api/tile?layer=${layer}&z={z}&x={x}&y={y}`,
-      { opacity: 0.6, maxZoom: 18 }
-    ).addTo(_map);
+    _owmLayer = L.tileLayer(`/api/tile?layer=${layer}&z={z}&x={x}&y={y}`, {
+      opacity: 0.6,
+      maxZoom: 18,
+      attribution: '© <a href="https://openweathermap.org">OpenWeatherMap</a>',
+    }).addTo(_map);
   }
 </script>
 </body>
