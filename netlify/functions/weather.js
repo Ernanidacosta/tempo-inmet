@@ -19,7 +19,7 @@ const WMO_CONDITIONS = {
   56: 'Chuva gelada leve', 57: 'Chuva gelada',
   61: 'Chuva leve', 63: 'Chuva moderada', 65: 'Chuva forte',
   66: 'Chuva gelada', 67: 'Chuva gelada forte',
-  71: 'Neve leve', 73: 'Neve', 75: 'Neve forte', 77: 'Granizo',
+  71: 'Neve leve', 73: 'Neve', 75: 'Neve forte', 77: 'Grãos de neve',
   80: 'Pancadas leves', 81: 'Pancadas de chuva', 82: 'Pancadas fortes',
   85: 'Neve em pancadas', 86: 'Neve em pancadas fortes',
   95: 'Trovoada', 96: 'Trovoada com granizo', 99: 'Trovoada severa',
@@ -355,16 +355,23 @@ function merge(cityName, wx, aq, cptecDays, obsCurrent = null) {
     }
   }
 
-  // Reconciliação: OWM "céu limpo" não pode silenciar precipitação medida pelo Open-Meteo.
-  // Se o modelo vê ≥ 0.3mm na janela atual e a condição ainda aparece como "limpo/nublado",
-  // é porque a estação OWM (possivelmente distante) não captou a chuva local.
+  // Reconciliação: OWM "limpo" não pode silenciar sinal grave do Open-Meteo.
+  // A estação OWM pode estar distante e perder chuva local, neve ou trovoada.
   const modelPrecip = cw.precipitation ?? 0;
+  const modelCode   = Number.parseInt(cw.weather_code || 0, 10);
+
+  // Chuva: modelo mede precipitação ≥ 0.3 mm mas condição ainda diz "limpo/nublado"
   if (current.code < 51 && modelPrecip >= 0.3) {
     const rc = precipMmToWmo(modelPrecip);
     if (rc) { current.code = rc; current.condition = WMO_CONDITIONS[rc] || ''; }
   }
-  // Fallback: se OWM não reportou rain.1h mas o modelo mede precipitação, propagar o valor
-  // para que o card de Chuva mostre mm/h em vez de "% chance".
+  // Neve / tempo severo: WMO ≥ 71 (neve, pancadas, trovoada) do modelo prevalece
+  // sobre qualquer código menos grave do OWM — são condições que não devem ser suprimidas.
+  if (modelCode >= 71 && current.code < modelCode) {
+    current.code = modelCode;
+    current.condition = WMO_CONDITIONS[modelCode] || '';
+  }
+  // Fallback: propagar precip_now_mm do modelo quando OWM não tem rain.1h
   if (!current.precip_now_mm && modelPrecip >= 0.1) {
     current.precip_now_mm = Math.round(modelPrecip * 10) / 10;
   }

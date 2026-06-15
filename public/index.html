@@ -678,7 +678,7 @@
     45:'Nevoeiro',48:'Nevoeiro com geada',
     51:'Garoa leve',53:'Garoa',55:'Garoa intensa',
     61:'Chuva leve',63:'Chuva moderada',65:'Chuva forte',
-    71:'Neve leve',73:'Neve',75:'Neve forte',77:'Granizo',
+    71:'Neve leve',73:'Neve',75:'Neve forte',77:'Grãos de neve',
     80:'Pancadas leves',81:'Pancadas de chuva',82:'Pancadas fortes',
     95:'Trovoada',96:'Trovoada com granizo',99:'Trovoada severa',
   };
@@ -923,11 +923,15 @@
     };
     $id('src').textContent = srcMap[data.source] || `· ${data.source || ''}`;
 
-    // thunder probability pill (Tomorrow.io only)
+    // thunder pill: probabilidade (Tomorrow.io) ou código WMO de trovoada
     const tEl = $id('thunder-pill');
-    const tp = data.current?.thunder_prob;
+    const tp   = data.current?.thunder_prob;
+    const code = data.current?.code ?? 0;
     if (tp != null && tp >= 20) {
-      tEl.textContent = `Trovoada ${tp}%`;
+      tEl.textContent = `⚡ Trovoada ${tp}%`;
+      tEl.hidden = false;
+    } else if (code >= 95) {
+      tEl.textContent = '⚡ Trovoada';
       tEl.hidden = false;
     } else {
       tEl.hidden = true;
