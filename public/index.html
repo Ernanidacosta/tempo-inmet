@@ -325,6 +325,14 @@
       font-size: .72rem; font-weight: 600; letter-spacing: .02em;
       margin-top: .3rem;
     }
+    .cold-pill {
+      display: inline-flex; align-items: center; gap: .3rem;
+      background: rgba(147,197,253,.15); color: #93c5fd;
+      border: 1px solid rgba(147,197,253,.3);
+      padding: .2rem .6rem; border-radius: 999px;
+      font-size: .72rem; font-weight: 600; letter-spacing: .02em;
+      margin-top: .3rem;
+    }
     .dd-close {
       background: none; border: none; color: rgba(255,255,255,.35);
       cursor: pointer; font-size: 1rem; line-height: 1;
@@ -590,6 +598,7 @@
         <div class="temp" id="temp" aria-label="Temperatura">–<sup aria-hidden="true">°</sup></div>
         <div class="cond" id="cond"></div>
         <span id="thunder-pill" class="thunder-pill" hidden aria-live="polite"></span>
+        <span id="cold-pill" class="cold-pill" hidden aria-live="polite"></span>
         <div class="range" id="range"></div>
       </div>
 
@@ -935,6 +944,19 @@
       tEl.hidden = false;
     } else {
       tEl.hidden = true;
+    }
+
+    // cold pill: sensação térmica como sinal principal (captura vento frio)
+    const cEl = $id('cold-pill');
+    const fl  = data.current?.feels_like ?? data.current?.temp;
+    if (fl != null && fl <= 5) {
+      cEl.textContent = '❄️ Geada';
+      cEl.hidden = false;
+    } else if (fl != null && fl <= 10) {
+      cEl.textContent = '❄️ Frio';
+      cEl.hidden = false;
+    } else {
+      cEl.hidden = true;
     }
 
     hide('loading'); hide('err'); show('wx');
