@@ -896,7 +896,6 @@
       'owm+open-meteo':              '· OWM + Open-Meteo',
       'tomorrowio+cptec+open-meteo': '· Tomorrow.io + CPTEC + Open-Meteo',
       'tomorrowio+open-meteo':       '· Tomorrow.io + Open-Meteo',
-      'inmet':                       '· INMET',
       'cptec+open-meteo':            '· CPTEC/INPE + Open-Meteo',
       'open-meteo':                  '· Open-Meteo',
     };
@@ -1063,7 +1062,7 @@
 
     if (!data) {
       try { data = await fetchOpenMeteo(lat, lon); }
-      catch (e) { console.error('fallback failed:', e); }
+      catch (_) {}
     }
 
     if (!data) {
