@@ -30,7 +30,7 @@
     .sky-storm   { --g1:#0a0f1e; --g2:#111827; --g3:#1f2937; }
     .sky-snow    { --g1:#cbd5e1; --g2:#e2e8f0; --g3:#f8fafc; --text:#0f172a; }
     .sky-night   { --g1:#020617; --g2:#0f172a; --g3:#1e293b; }
-    .sky-snow *  { color: var(--text,#fff) !important; }
+    .sky-snow *:not(.aqi-pill):not(.rel-alta):not(.rel-boa):not(.rel-padrao):not(.thunder-pill) { color: var(--text,#fff) !important; }
     .sky-snow .source { color: rgba(15,23,42,.45) !important; }
 
     /* ── reduced motion ─── */
@@ -323,7 +323,17 @@
       background: #3d2c00; color: #ffb300;
       padding: .2rem .6rem; border-radius: 999px;
       font-size: .72rem; font-weight: 600; letter-spacing: .02em;
+      margin-top: .3rem;
     }
+    .dd-close {
+      background: none; border: none; color: rgba(255,255,255,.35);
+      cursor: pointer; font-size: 1rem; line-height: 1;
+      padding: .25rem; border-radius: 50%; flex-shrink: 0;
+      min-width: 2rem; min-height: 2rem;
+      display: flex; align-items: center; justify-content: center;
+      transition: color .15s; margin-left: auto;
+    }
+    .dd-close:hover { color: rgba(255,255,255,.85); }
 
     /* ── radar map ─── */
     .section-hd {
@@ -340,8 +350,15 @@
     .layer-btn.active {
       background: rgba(56,189,248,.25); border-color: rgba(56,189,248,.5); color: #7dd3fc;
     }
-    #radar-map { height: 280px; border-radius: 12px; overflow: hidden; margin-top: .5rem; }
+    #radar-map { height: 280px; border-radius: 12px; overflow: hidden; margin-top: .5rem; position: relative; }
     @media (max-width: 480px) { #radar-map { height: 200px; } }
+    .map-loading::after {
+      content: 'Carregando…';
+      position: absolute; inset: 0; z-index: 1000;
+      background: rgba(0,0,0,.32);
+      display: flex; align-items: center; justify-content: center;
+      font-size: .8rem; color: rgba(255,255,255,.7); pointer-events: none;
+    }
 
     /* ── search overlay ─── */
     #search-backdrop {
@@ -572,6 +589,7 @@
         <div class="wx-icon" id="icon" aria-hidden="true">⛅</div>
         <div class="temp" id="temp" aria-label="Temperatura">–<sup aria-hidden="true">°</sup></div>
         <div class="cond" id="cond"></div>
+        <span id="thunder-pill" class="thunder-pill" hidden aria-live="polite"></span>
         <div class="range" id="range"></div>
       </div>
 
@@ -609,7 +627,7 @@
 
     <section id="radar-section" hidden>
       <div class="section-hd">
-        RADAR
+        MAPA
         <div class="layer-btns" role="group" aria-label="Camada do mapa">
           <button class="layer-btn active" data-layer="precipitation_new">Chuva</button>
           <button class="layer-btn" data-layer="temp_new">Temperatura</button>
@@ -621,7 +639,6 @@
 
     <div class="footer">
       <span id="rel-pill" class="rel-pill" hidden></span>
-      <span id="thunder-pill" class="thunder-pill" hidden aria-live="polite"></span>
       <span class="source" id="src" aria-label="Fonte dos dados"></span>
     </div>
 
@@ -772,6 +789,7 @@
           ${d.max != null ? d.max : '–'}°
           <span class="dd-temp-min"> / ${d.min != null ? d.min : '–'}°</span>
         </div>
+        <button class="dd-close" onclick="renderDayDetail(${idx})" aria-label="Fechar detalhes do dia">✕</button>
       </div>
       <div class="dd-grid">
         ${cells.map(([lbl, val]) => `
@@ -813,13 +831,17 @@
       $id('range').textContent = `Máx ${daily[0].max}°  ·  Mín ${daily[0].min}°`;
 
     // primary details
-    $id('d-feels').textContent = c.feels_like != null ? `${c.feels_like}°` : (c.temp != null ? `${c.temp}°` : '–');
+    $id('d-feels').textContent = c.feels_like != null ? `${c.feels_like}°` : '–';
     $id('d-hum').textContent   = c.humidity   != null ? `${c.humidity}%`   : '–';
     $id('d-wind').textContent  = c.wind_kph   != null
       ? `${c.wind_kph}${c.wind_dir ? ' ' + c.wind_dir : ''} km/h` : '–';
-    $id('d-rain').textContent  = c.precip_now_mm > 0
-      ? `${c.precip_now_mm} mm/h`
-      : daily[0]?.precip_prob != null ? `${daily[0].precip_prob}%` : '–';
+    if (c.precip_now_mm > 0) {
+      $id('d-rain').textContent = `${c.precip_now_mm} mm/h`;
+    } else if (daily[0]?.precip_prob != null) {
+      $id('d-rain').textContent = `${daily[0].precip_prob}% chance`;
+    } else {
+      $id('d-rain').textContent = '–';
+    }
 
     // secondary details
     $id('d-uv').textContent   = c.uv_index      != null ? `${c.uv_index} · ${uvLabel(c.uv_index)}` : '–';
@@ -1113,7 +1135,7 @@
     if (!$id('search').hidden && !$id('search').contains(e.target)) closeSearch();
   });
 
-  let searchTimer;
+  let searchTimer, _searchCtrl = null;
   $id('sinput').addEventListener('input', e => {
     clearTimeout(searchTimer);
     searchTimer = setTimeout(() => doSearch(e.target.value.trim()), 280);
@@ -1122,10 +1144,16 @@
   async function doSearch(q) {
     const ul = $id('sresults');
     if (!q || q.length < 2) { ul.innerHTML = ''; return; }
+    if (_searchCtrl) _searchCtrl.abort();
+    _searchCtrl = new AbortController();
     try {
-      const r = await fetch(`https://geocoding-api.open-meteo.com/v1/search?name=${encodeURIComponent(q)}&language=pt&count=8`);
+      const r = await fetch(
+        `https://geocoding-api.open-meteo.com/v1/search?name=${encodeURIComponent(q)}&language=pt&count=8`,
+        { signal: _searchCtrl.signal },
+      );
       paintResults((await r.json()).results || []);
-    } catch (_) {
+    } catch (e) {
+      if (e.name === 'AbortError') return;
       ul.innerHTML = '<li class="sr-empty">Erro na busca.</li>';
     }
   }
@@ -1170,16 +1198,18 @@
         attribution: '© <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>',
       }).addTo(_map);
       _marker = L.marker([lat, lon]).addTo(_map);
+      _map.on('loading', () => $id('radar-map').classList.add('map-loading'));
+      _map.on('load',    () => $id('radar-map').classList.remove('map-loading'));
+      document.querySelectorAll('.layer-btn').forEach(btn => {
+        btn.onclick = () => {
+          document.querySelectorAll('.layer-btn').forEach(b => b.classList.remove('active'));
+          btn.classList.add('active');
+          _activeMapLayer = btn.dataset.layer;
+          _setOwmLayer(_activeMapLayer);
+        };
+      });
     }
     _setOwmLayer(_activeMapLayer);
-    document.querySelectorAll('.layer-btn').forEach(btn => {
-      btn.onclick = () => {
-        document.querySelectorAll('.layer-btn').forEach(b => b.classList.remove('active'));
-        btn.classList.add('active');
-        _activeMapLayer = btn.dataset.layer;
-        _setOwmLayer(_activeMapLayer);
-      };
-    });
   }
 
   function _setOwmLayer(layer) {
