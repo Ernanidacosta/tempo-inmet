@@ -1,8 +1,10 @@
 'use strict';
 
+const VALID_LAYERS = new Set(['precipitation_new', 'temp_new', 'wind_new', 'clouds_new', 'pressure_new']);
+
 exports.handler = async (event) => {
   const { layer, z, x, y } = event.queryStringParameters || {};
-  if (!layer || z == null || x == null || y == null)
+  if (!VALID_LAYERS.has(layer) || !/^\d+$/.test(z) || !/^\d+$/.test(x) || !/^\d+$/.test(y))
     return { statusCode: 400, body: '' };
 
   const key = process.env.OWM_KEY || '';

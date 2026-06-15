@@ -1140,7 +1140,9 @@
       li.setAttribute('role', 'option');
       li.setAttribute('tabindex', '0');
       const region = [r.admin1, r.country].filter(Boolean).join(', ');
-      li.innerHTML = `<span class="sr-city">${r.name}</span><span class="sr-region">${region}</span>`;
+      const srCity = document.createElement('span'); srCity.className = 'sr-city'; srCity.textContent = r.name;
+      const srReg  = document.createElement('span'); srReg.className  = 'sr-region'; srReg.textContent = region;
+      li.append(srCity, srReg);
       const select = () => { closeSearch(); load(r.latitude, r.longitude); };
       li.onclick = select;
       li.addEventListener('keydown', ev => { if (ev.key === 'Enter' || ev.key === ' ') { ev.preventDefault(); select(); } });

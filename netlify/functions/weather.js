@@ -1,3 +1,5 @@
+'use strict';
+
 const DAYS_PT = ['Dom', 'Seg', 'Ter', 'Qua', 'Qui', 'Sex', 'Sáb'];
 
 const COND_MAP = {
@@ -12,10 +14,15 @@ const COND_MAP = {
 
 const WMO_CONDITIONS = {
   0: 'Céu limpo', 1: 'Predominantemente limpo', 2: 'Parcialmente nublado', 3: 'Nublado',
-  45: 'Nevoeiro', 48: 'Nevoeiro com geada', 51: 'Garoa leve', 53: 'Garoa', 55: 'Garoa intensa',
-  61: 'Chuva leve', 63: 'Chuva moderada', 65: 'Chuva forte', 71: 'Neve leve', 73: 'Neve',
-  75: 'Neve forte', 77: 'Granizo', 80: 'Pancadas leves', 81: 'Pancadas de chuva',
-  82: 'Pancadas fortes', 95: 'Trovoada', 96: 'Trovoada com granizo', 99: 'Trovoada severa',
+  45: 'Nevoeiro', 48: 'Nevoeiro com geada',
+  51: 'Garoa leve', 53: 'Garoa', 55: 'Garoa intensa',
+  56: 'Chuva gelada leve', 57: 'Chuva gelada',
+  61: 'Chuva leve', 63: 'Chuva moderada', 65: 'Chuva forte',
+  66: 'Chuva gelada', 67: 'Chuva gelada forte',
+  71: 'Neve leve', 73: 'Neve', 75: 'Neve forte', 77: 'Granizo',
+  80: 'Pancadas leves', 81: 'Pancadas de chuva', 82: 'Pancadas fortes',
+  85: 'Neve em pancadas', 86: 'Neve em pancadas fortes',
+  95: 'Trovoada', 96: 'Trovoada com granizo', 99: 'Trovoada severa',
 };
 
 const AQI_LABELS = [[0, 'Ótima'], [20, 'Boa'], [40, 'Moderada'], [60, 'Ruim'], [80, 'Muito Ruim'], [100, 'Extremamente Ruim']];
@@ -123,7 +130,7 @@ async function fetchOwm(lat, lon) {
     wind_dir: wd !== undefined && wd !== null ? bearing(wd) : null,
     wind_gust_kph: rnd((w.gust || 0) * 3.6),
     pressure_mb: rnd(m.pressure),
-    visibility_km: round1((data.visibility || 0) / 1000),
+    visibility_km: data.visibility != null ? round1(data.visibility / 1000) : null,
     precip_now_mm: rainMm ? Math.round(rainMm * 10) / 10 : null,
     code: wmo,
     condition: WMO_CONDITIONS[wmo] || '',
@@ -234,7 +241,7 @@ function merge(cityName, wx, aq, cptecDays, obsCurrent = null) {
   const rainCode = precipMmToWmo(cw.precipitation);
   if (rainCode && code < 51) code = rainCode;
 
-  const visM = cw.visibility || h('visibility');
+  const visM = cw.visibility ?? h('visibility');
   const visKm = visM !== undefined && visM !== null ? Math.round((visM / 1000) * 10) / 10 : null;
 
   let aqiVal = null;
