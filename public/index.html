@@ -1071,7 +1071,7 @@
       return;
     }
     render(data);
-    initRadarMap(_lastLat, _lastLon, data.tile_key || '');
+    initRadarMap(_lastLat, _lastLon, data.key_status?.owm ?? false);
   }
 
   function init() {
@@ -1154,8 +1154,8 @@
 <script>
   let _map = null, _owmLayer = null, _marker = null, _activeMapLayer = 'precipitation_new';
 
-  function initRadarMap(lat, lon, tileKey) {
-    if (!tileKey) return;
+  function initRadarMap(lat, lon, hasOwm) {
+    if (!hasOwm) return;
     show('radar-section');
     if (_map) {
       _map.setView([lat, lon], 9);
@@ -1167,21 +1167,21 @@
        .addTo(_map);
       _marker = L.marker([lat, lon]).addTo(_map);
     }
-    _setOwmLayer(_activeMapLayer, tileKey);
+    _setOwmLayer(_activeMapLayer);
     document.querySelectorAll('.layer-btn').forEach(btn => {
       btn.onclick = () => {
         document.querySelectorAll('.layer-btn').forEach(b => b.classList.remove('active'));
         btn.classList.add('active');
         _activeMapLayer = btn.dataset.layer;
-        _setOwmLayer(_activeMapLayer, tileKey);
+        _setOwmLayer(_activeMapLayer);
       };
     });
   }
 
-  function _setOwmLayer(layer, key) {
+  function _setOwmLayer(layer) {
     if (_owmLayer) _map.removeLayer(_owmLayer);
     _owmLayer = L.tileLayer(
-      `https://tile.openweathermap.org/map/${layer}/{z}/{x}/{y}.png?appid=${key}`,
+      `/api/tile?layer=${layer}&z={z}&x={x}&y={y}`,
       { opacity: 0.6, maxZoom: 18 }
     ).addTo(_map);
   }

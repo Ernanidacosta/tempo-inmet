@@ -369,7 +369,6 @@ function merge(cityName, wx, aq, cptecDays, obsCurrent = null) {
       owm: Boolean(process.env.OWM_KEY),
       tomorrowio: Boolean(process.env.TOMORROWIO_KEY),
     },
-    tile_key: process.env.OWM_KEY || '',
     current,
     today: { sunrise, sunset, uv_max: uvMax, aqi: aqiVal, aqi_label: aqiLabel, pm25 },
     hourly: hourlyOut,
